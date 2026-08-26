@@ -1,278 +1,332 @@
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+import os
 import sqlite3
+import random
+import asyncio
+import threading
+import uvicorn
+import discord
+from discord.ext import commands
+from discord import app_commands
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
 
-app = FastAPI(title="SquattedsKillFeedZ API")
-DB_NAME = "dayz_stats.db"
+load_dotenv()
+TOKEN = os.getenv("DISCORD_TOKEN")
 
-@app.get("/", response_class=HTMLResponse)
-def read_root():
-    return """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <title>SquattedsKillFeedZ | Server Dashboard</title>
-        <style>
-            :root {
-                --bg-deep: #0a080f;
-                --bg-panel: #13101c;
-                --bg-hover: #1f1a2e;
-                --neon-purple: #c084fc;
-                --neon-glow: rgba(192, 132, 252, 0.4);
-                --text-main: #f3f4f6;
-                --text-muted: #9ca3af;
-                --border-color: #2e2640;
-            }
+# --- INITIALIZE BOTH DISCORD & FASTAPI ---
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
 
-            body {
-                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                background-color: var(--bg-deep);
-                color: var(--text-main);
-                margin: 0;
-                padding: 0;
-                display: flex;
-                height: 100vh;
-            }
+app = FastAPI()
 
-            /* Sidebar Styling */
-            sidebar {
-                width: 260px;
-                background-color: var(--bg-panel);
-                border-right: 1px solid var(--border-color);
-                display: flex;
-                flex-direction: column;
-                padding: 24px;
-            }
+class DayZBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
 
-            .brand {
-                font-size: 1.1rem;
-                font-weight: bold;
-                color: var(--neon-purple);
-                margin-bottom: 30px;
-                letter-spacing: 1.5px;
-                text-shadow: 0 0 10px var(--neon-glow);
-            }
+    async def setup_hook(self):
+        self.add_view(TicketCreateView())
+        self.add_view(TicketCloseView())
+        await self.tree.sync()
+        print("Slash commands synced globally and persistent views loaded.")
 
-            .nav-links {
-                list-style: none;
-                padding: 0;
-                margin: 0;
-            }
+bot = DayZBot()
 
-            .nav-links li {
-                padding: 12px 16px;
-                margin-bottom: 8px;
-                border-radius: 6px;
-                cursor: pointer;
-                color: var(--text-muted);
-                transition: all 0.2s ease;
-            }
-
-            .nav-links li.active, .nav-links li:hover {
-                background-color: var(--bg-hover);
-                color: var(--neon-purple);
-                border-left: 3px solid var(--neon-purple);
-            }
-
-            /* Main Content Area */
-            .main-content {
-                flex: 1;
-                padding: 40px;
-                overflow-y: auto;
-            }
-
-            header h1 {
-                margin: 0 0 5px 0;
-                color: var(--text-main);
-                font-size: 1.8rem;
-            }
-
-            header p {
-                color: var(--text-muted);
-                margin-top: 0;
-            }
-
-            /* Dashboard Card */
-            .card {
-                background-color: var(--bg-panel);
-                border: 1px solid var(--border-color);
-                border-radius: 8px;
-                padding: 24px;
-                margin-top: 25px;
-                box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
-            }
-
-            .card h2 {
-                margin-top: 0;
-                font-size: 1.2rem;
-                color: var(--neon-purple);
-                border-bottom: 1px solid var(--border-color);
-                padding-bottom: 12px;
-                text-shadow: 0 0 8px var(--neon-glow);
-            }
-
-            /* Table Styling */
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 15px;
-            }
-
-            th, td {
-                padding: 14px 16px;
-                text-align: left;
-                border-bottom: 1px solid var(--border-color);
-            }
-
-            th {
-                color: var(--text-muted);
-                font-weight: 600;
-                font-size: 0.85rem;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }
-
-            tr:hover td {
-                background-color: var(--bg-hover);
-            }
-
-            .rank-badge {
-                font-weight: bold;
-                color: var(--neon-purple);
-            }
-
-            .hidden {
-                display: none;
-            }
-        </style>
-    </head>
-    <body>
-
-        <sidebar>
-            <div class="brand">SquattedsKillFeedZ</div>
-            <ul class="nav-links">
-                <li id="nav-leaderboard" class="active" onclick="switchTab('leaderboard')">Leaderboard</li>
-                <li id="nav-kills" onclick="switchTab('kills')">Recent Kills</li>
-                <li onclick="alert('Server Info coming soon!')">Server Info</li>
-            </ul>
-        </sidebar>
-
-        <div class="main-content">
-            <header>
-                <h1>Server Telemetry</h1>
-                <p>Live session analytics and combat stats tracker.</p>
-            </header>
-
-            <!-- Leaderboard View -->
-            <div id="section-leaderboard" class="card">
-                <h2>Top Killers Leaderboard</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Rank</th>
-                            <th>Player</th>
-                            <th>Kills</th>
-                        </tr>
-                    </thead>
-                    <tbody id="leaderboard-body">
-                        <!-- Populated via JS -->
-                    </tbody>
-                </table>
-            </div>
-
-            <!-- Recent Kills View -->
-            <div id="section-kills" class="card hidden">
-                <h2>Recent Combat Feed</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Killer</th>
-                            <th>Victim</th>
-                        </tr>
-                    </thead>
-                    <tbody id="kills-body">
-                        <!-- Populated via JS -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <script>
-            function switchTab(tab) {
-                document.getElementById('nav-leaderboard').classList.remove('active');
-                document.getElementById('nav-kills').classList.remove('active');
-                document.getElementById('section-leaderboard').classList.add('hidden');
-                document.getElementById('section-kills').classList.add('hidden');
-
-                if (tab === 'leaderboard') {
-                    document.getElementById('nav-leaderboard').classList.add('active');
-                    document.getElementById('section-leaderboard').classList.remove('hidden');
-                } else if (tab === 'kills') {
-                    document.getElementById('nav-kills').classList.add('active');
-                    document.getElementById('section-kills').classList.remove('hidden');
-                }
-            }
-
-            // Fetch Leaderboard Data
-            fetch('/leaderboard')
-                .then(response => response.json())
-                .then(data => {
-                    const tbody = document.getElementById('leaderboard-body');
-                    tbody.innerHTML = "";
-                    data.leaderboard.forEach((entry, index) => {
-                        tbody.innerHTML += `<tr>
-                            <td class="rank-badge">#${index + 1}</td>
-                            <td>${entry.player}</td>
-                            <td>${entry.kills}</td>
-                        </tr>`;
-                    });
-                });
-
-            // Fetch Recent Kills Data
-            fetch('/recent-kills')
-                .then(response => response.json())
-                .then(data => {
-                    const tbody = document.getElementById('kills-body');
-                    tbody.innerHTML = "";
-                    data.recent_kills.forEach((entry) => {
-                        tbody.innerHTML += `<tr>
-                            <td class="rank-badge">${entry.killer}</td>
-                            <td>${entry.victim}</td>
-                        </tr>`;
-                    });
-                });
-        </script>
-
-    </body>
-    </html>
-    """
-
-@app.get("/leaderboard")
-def get_leaderboard():
-    conn = sqlite3.connect(DB_NAME)
+# --- DATABASE SETUP ---
+def init_db():
+    conn = sqlite3.connect("dayz_bot.db")
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT killer, COUNT(*) as kill_count 
-        FROM kills 
-        GROUP BY killer 
-        ORDER BY kill_count DESC
-    ''')
-    results = cursor.fetchall()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS server_configs (
+            guild_id INTEGER PRIMARY KEY,
+            rules_channel_id INTEGER,
+            rules_role_id INTEGER,
+            ticket_channel_id INTEGER,
+            ticket_category_id INTEGER,
+            killfeed_channel_id INTEGER
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS economy (
+            user_id INTEGER PRIMARY KEY,
+            wallet INTEGER DEFAULT 100,
+            bank INTEGER DEFAULT 500
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS factions (
+            faction_name TEXT PRIMARY KEY,
+            leader_id INTEGER,
+            color TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS faction_members (
+            user_id INTEGER PRIMARY KEY,
+            faction_name TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS kills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            killer TEXT,
+            victim TEXT,
+            weapon TEXT,
+            distance INTEGER,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
     conn.close()
-    return {"leaderboard": [{"player": row[0], "kills": row[1]} for row in results]}
 
-@app.get("/recent-kills")
-def get_recent_kills():
-    conn = sqlite3.connect(DB_NAME)
+init_db()
+
+def get_balance(user_id: int):
+    conn = sqlite3.connect("dayz_bot.db")
     cursor = conn.cursor()
-    # Adjust column names here if your table uses different names for victim/killer
-    cursor.execute('''
-        SELECT killer, victim 
-        FROM kills 
-        ORDER BY rowid DESC 
-        LIMIT 25
-    ''')
-    results = cursor.fetchall()
+    cursor.execute("SELECT wallet, bank FROM economy WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+    if not row:
+        cursor.execute("INSERT INTO economy (user_id, wallet, bank) VALUES (?, 100, 500)", (user_id,))
+        conn.commit()
+        wallet, bank = 100, 500
+    else:
+        wallet, bank = row
     conn.close()
-    return {"recent_kills": [{"killer": row[0], "victim": row[1]} for row in results]}
+    return wallet, bank
+
+def update_balance(user_id: int, wallet_change: int = 0, bank_change: int = 0):
+    wallet, bank = get_balance(user_id)
+    new_wallet = max(0, wallet + wallet_change)
+    new_bank = max(0, bank + bank_change)
+    conn = sqlite3.connect("dayz_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE economy SET wallet = ?, bank = ? WHERE user_id = ?", (new_wallet, new_bank, user_id))
+    conn.commit()
+    conn.close()
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("DayZ Master Bot is fully online, error-proofed, and ready!")
+
+# --- FASTAPI WEBHOOK ENDPOINT (For DayZ Killfeeds) ---
+@app.post("/killfeed")
+async def receive_killfeed(request: Request):
+    try:
+        data = await request.json()
+        print(f"Received Killfeed Data: {data}")
+        
+        # Example insertion into the kills table
+        killer = data.get("killer", "Unknown")
+        victim = data.get("victim", "Unknown")
+        weapon = data.get("weapon", "Unknown")
+        distance = data.get("distance", 0)
+
+        conn = sqlite3.connect("dayz_bot.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO kills (killer, victim, weapon, distance) VALUES (?, ?, ?, ?)",
+            (killer, victim, weapon, distance)
+        )
+        conn.commit()
+        conn.close()
+        
+        return {"status": "success", "message": "Killfeed logged successfully"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/")
+async def root():
+    return {"status": "Online", "service": "SquattedKillFeedZ API running"}
+
+# --- RULES & VERIFICATION SYSTEM ---
+class VerificationView(discord.ui.View):
+    def __init__(self, role_id: int):
+        super().__init__(timeout=None)
+        self.role_id = role_id
+
+    @discord.ui.button(label="✅ Click Here to Verify & Unlock Channels", style=discord.ButtonStyle.green, custom_id="verify_button_persist")
+    async def verify_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role = interaction.guild.get_role(self.role_id)
+        if not role:
+            await interaction.response.send_message("Verification role not found. Please contact an admin.", ephemeral=True)
+            return
+        try:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message("You have been verified! Channels unlocked.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to assign role. Check bot hierarchy. Error: {e}", ephemeral=True)
+
+@bot.tree.command(name="setup_rules", description="Post the verification rules embed.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_rules(interaction: discord.Interaction, role: discord.Role):
+    conn = sqlite3.connect("dayz_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO server_configs (guild_id, rules_channel_id, rules_role_id) VALUES (?, ?, ?)", 
+                   (interaction.guild.id, interaction.channel.id, role.id))
+    conn.commit()
+    conn.close()
+
+    embed = discord.Embed(
+        title="⚠️ Server Rules & Verification",
+        description="1. Respect all members.\n2. No toxic behavior, hate speech, or harassment.\n3. Follow platform Terms of Service.\n\nClick the button below to verify and unlock the server!",
+        color=discord.Color.dark_red()
+    )
+    view = VerificationView(role.id)
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("Rules verification panel deployed successfully!", ephemeral=True)
+
+# --- TICKET SYSTEM ---
+class TicketCreateView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎫 Create Ticket", style=discord.ButtonStyle.blurple, custom_id="create_ticket_persist")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        member = interaction.user
+
+        existing_channel = discord.utils.get(guild.text_channels, name=f"ticket-{member.name.lower()}")
+        if existing_channel:
+            await interaction.response.send_message(f"You already have an open ticket here: {existing_channel.mention}", ephemeral=True)
+            return
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
+        }
+
+        try:
+            ticket_channel = await guild.create_text_channel(
+                name=f"ticket-{member.name}",
+                overwrites=overwrites,
+                topic=f"Support ticket for {member.name} (ID: {member.id})"
+            )
+            
+            embed = discord.Embed(
+                title="🎫 Support Ticket",
+                description=f"Welcome {member.mention}! Support staff will be with you shortly.\nClick the button below when you are ready to close this ticket.",
+                color=discord.Color.blue()
+            )
+            await ticket_channel.send(embed=embed, view=TicketCloseView())
+            await interaction.response.send_message(f"Ticket created successfully! Head over to {ticket_channel.mention}", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Failed to create ticket channel. Error: {e}", ephemeral=True)
+
+class TicketCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.red, custom_id="close_ticket_persist")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("Closing ticket in 3 seconds...", ephemeral=True)
+        await asyncio.sleep(3)
+        await interaction.channel.delete()
+
+@bot.tree.command(name="setup_tickets", description="Deploy the ticket creation panel.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setup_tickets(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="Support",
+        description="Click the button below to open a private support ticket with our staff team.",
+        color=discord.Color.dark_theme()
+    )
+    view = TicketCreateView()
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message("Ticket panel deployed successfully!", ephemeral=True)
+
+# --- ECONOMY & BANKING COMMANDS ---
+@bot.tree.command(name="balance", description="Check your wallet and bank balance.")
+async def balance(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    wallet, bank = get_balance(target.id)
+    embed = discord.Embed(title=f"💰 Balance for {target.name}", color=discord.Color.gold())
+    embed.add_field(name="Wallet", value=f"${wallet:,}", inline=True)
+    embed.add_field(name="Bank", value=f"${bank:,}", inline=True)
+    embed.add_field(name="Total Net Worth", value=f"${wallet + bank:,}", inline=False)
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="deposit", description="Deposit cash from your wallet into your bank.")
+async def deposit(interaction: discord.Interaction, amount: int):
+    wallet, bank = get_balance(interaction.user.id)
+    if amount <= 0 or wallet < amount:
+        await interaction.response.send_message("Invalid amount or insufficient wallet cash.", ephemeral=True)
+        return
+    update_balance(interaction.user.id, wallet_change=-amount, bank_change=amount)
+    await interaction.response.send_message(f"Successfully deposited **${amount:,}** into your bank account.")
+
+@bot.tree.command(name="withdraw", description="Withdraw cash from your bank to your wallet.")
+async def withdraw(interaction: discord.Interaction, amount: int):
+    wallet, bank = get_balance(interaction.user.id)
+    if amount <= 0 or bank < amount:
+        await interaction.response.send_message("Invalid amount or insufficient bank funds.", ephemeral=True)
+        return
+    update_balance(interaction.user.id, wallet_change=amount, bank_change=-amount)
+    await interaction.response.send_message(f"Successfully withdrew **${amount:,}** to your wallet.")
+
+@bot.tree.command(name="pay", description="Transfer cash from your wallet to another player.")
+async def pay(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if member.id == interaction.user.id:
+        await interaction.response.send_message("You can't pay yourself!", ephemeral=True)
+        return
+    if amount <= 0:
+        await interaction.response.send_message("Amount must be greater than zero.", ephemeral=True)
+        return
+    sender_wallet, _ = get_balance(interaction.user.id)
+    if sender_wallet < amount:
+        await interaction.response.send_message("You don't have enough cash in your wallet for this transfer.", ephemeral=True)
+        return
+    update_balance(interaction.user.id, wallet_change=-amount)
+    update_balance(member.id, wallet_change=amount)
+    await interaction.response.send_message(f"Successfully transferred **${amount:,}** to {member.mention}.")
+
+# --- CASINO & GAMBLING COMMANDS ---
+@bot.tree.command(name="coinflip", description="Flip a coin and double your money or lose it.")
+@app_commands.choices(choice=[app_commands.Choice(name="Heads", value="heads"), app_commands.Choice(name="Tails", value="tails")])
+async def coinflip(interaction: discord.Interaction, amount: int, choice: str):
+    wallet, _ = get_balance(interaction.user.id)
+    if amount <= 0 or wallet < amount:
+        await interaction.response.send_message("Invalid amount or insufficient wallet cash.", ephemeral=True)
+        return
+    outcome = random.choice(["heads", "tails"])
+    if choice.lower() == outcome:
+        update_balance(interaction.user.id, wallet_change=amount)
+        await interaction.response.send_message(f"🪙 It landed on **{outcome}**! You won **${amount:,}**!")
+    else:
+        update_balance(interaction.user.id, wallet_change=-amount)
+        await interaction.response.send_message(f"🪙 It landed on **{outcome}**. You lost **${amount:,}**.")
+
+# --- FACTION MANAGEMENT SYSTEM ---
+@bot.tree.command(name="createfaction", description="Register a new faction.")
+async def createfaction(interaction: discord.Interaction, name: str, color: str):
+    conn = sqlite3.connect("dayz_bot.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT faction_name FROM faction_members WHERE user_id = ?", (interaction.user.id,))
+    if cursor.fetchone():
+        conn.close()
+        await interaction.response.send_message("You are already in a faction! Leave your current one first.", ephemeral=True)
+        return
+    
+    cursor.execute("SELECT faction_name FROM factions WHERE faction_name = ?", (name,))
+    if cursor.fetchone():
+        conn.close()
+        await interaction.response.send_message("A faction with this name already exists.", ephemeral=True)
+        return
+
+    cursor.execute("INSERT INTO factions (faction_name, leader_id, color) VALUES (?, ?, ?)", (name, interaction.user.id, color))
+    cursor.execute("INSERT INTO faction_members (user_id, faction_name) VALUES (?, ?)", (interaction.user.id, name))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f"🛡️ Faction **{name}** has been successfully created with color **{color}**!")
+
+# --- RUNNER FOR BOTH UVICORN AND DISCORD ---
+def run_fastapi():
+    port = int(os.getenv("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
+    fastapi_thread.start()
+    bot.run(TOKEN)
