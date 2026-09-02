@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import random
+import asyncio
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
@@ -67,7 +68,6 @@ def init_db():
         );
     ''')
     
-    # Auto-patch missing column on legacy database files
     cursor.execute("PRAGMA table_info(server_configs)")
     columns = [column[1] for column in cursor.fetchall()]
     if 'live_leaderboard_channel_id' not in columns:
@@ -639,11 +639,11 @@ async def ticket_system(interaction: discord.Interaction, action: str, reason: s
 async def shop_link(interaction: discord.Interaction):
     await interaction.response.send_message("Access our community web store to purchase gear, weapons, and base packages at your server owner dashboard URL.", ephemeral=True)
 
-import threading
-
-def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
-
-if __name__ == "__main__":
-    threading.Thread(target=run_fastapi, daemon=True).start()
-    bot.run(os.getenv("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE"))
+# ==========================================
+# CONCURRENT LIFESPAN LAUNCHER FOR RENDER
+# ==========================================
+@app.on_event("startup")
+async def startup_event():
+    token = os.getenv("DISCORD_TOKEN")
+    if token:
+        asyncio.create_task(bot.start(token))
