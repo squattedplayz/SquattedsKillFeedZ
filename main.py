@@ -639,5 +639,11 @@ async def ticket_system(interaction: discord.Interaction, action: str, reason: s
 async def shop_link(interaction: discord.Interaction):
     await interaction.response.send_message("Access our community web store to purchase gear, weapons, and base packages at your server owner dashboard URL.", ephemeral=True)
 
+import threading
+
+def run_fastapi():
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
+
 if __name__ == "__main__":
+    threading.Thread(target=run_fastapi, daemon=True).start()
     bot.run(os.getenv("DISCORD_TOKEN", "YOUR_BOT_TOKEN_HERE"))
