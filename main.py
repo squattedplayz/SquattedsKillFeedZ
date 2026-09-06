@@ -231,11 +231,34 @@ async def admin_dashboard(email: str = ADMIN_EMAIL):
     return """
     <!DOCTYPE html>
     <html lang="en">
-    <head><title>Owner Dashboard</title></head>
-    <body style="background:#000;color:#fff;padding:40px;font-family:sans-serif;">
-        <h1>Welcome Back, Dwayne</h1>
-        <p>Owner Control Panel (Lifetime Free Access)</p>
-        <a href="/" style="color:#c084fc;">← Return to Main Panel</a>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Owner Dashboard - SQUATTEDS SKILL FEEDZ</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+            body { background: #000000; color: #f8fafc; padding: 40px; }
+            .container { max-width: 900px; margin: 0 auto; }
+            .card { background: #0a0510; border: 1px solid #2e1065; border-radius: 10px; padding: 30px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(126, 34, 206, 0.1); }
+            h1 { font-size: 24px; color: #ffffff; margin-bottom: 8px; }
+            p { color: #c084fc; font-size: 14px; margin-bottom: 20px; }
+            .action-btn { background: #7e22ce; color: white; border: none; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
+            .action-btn:hover { background: #6b21a8; }
+            .back { color: #a78bfa; font-size: 13px; text-decoration: none; display: inline-block; margin-top: 20px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="card">
+                <h1>Welcome Back, Dwayne</h1>
+                <p>Owner Control Panel • Lifetime Free Access Active</p>
+                <div style="display: flex; gap: 15px; margin-top: 20px;">
+                    <a href="/?tab=dashboard" class="action-btn">Go to Main Panel</a>
+                    <a href="/?tab=server_link" class="action-btn" style="background: #1e1b4b; border: 1px solid #6b21a8;">Configure RCON</a>
+                </div>
+            </div>
+            <a href="/" class="back">← Return to Home</a>
+        </div>
     </body>
     </html>
     """
