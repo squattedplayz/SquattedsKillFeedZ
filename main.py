@@ -19,7 +19,7 @@ ADMIN_EMAIL = "Dwayne.mashburn@gmail.com"
 ADMIN_PASSWORD = "Duanemashburn2!"
 
 fake_users_db = {
-    ADMIN_EMAIL: {
+    ADMIN_EMAIL.lower(): {
         "email": ADMIN_EMAIL,
         "password": ADMIN_PASSWORD,
         "is_admin": True,
@@ -217,10 +217,10 @@ async def login_page(request: Request):
 
 @app.post("/api/login-form")
 async def login_form_handler(email: str = Form(...), password: str = Form(...)):
-    user = fake_users_db.get(email)
+    user = fake_users_db.get(email.strip().lower())
     if not user or user["password"] != password:
         raise HTTPException(status_code=400, detail="Invalid credentials")
-    if user["email"] == ADMIN_EMAIL:
+    if user["is_admin"]:
         return RedirectResponse(url="/admin/dashboard", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
