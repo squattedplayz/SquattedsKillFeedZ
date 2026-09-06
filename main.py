@@ -80,13 +80,10 @@ async def home(request: Request, tab: str = "dashboard"):
         <div class="sidebar">
             <div class="brand">SQUATTEDS SKILL FEEDZ</div>
             <ul class="menu-list">
-                <a href="/?tab=dashboard" class="menu-item {'active' if tab == 'dashboard' else ''}">Dashboard</a>
-                <a href="/?tab=currency" class="menu-item {'active' if tab == 'currency' else ''}">Currency</a>
-                <a href="/?tab=casino" class="menu-item {'active' if tab == 'casino' else ''}">Casino</a>
-                <a href="/?tab=shop" class="menu-item {'active' if tab == 'shop' else ''}">Shop</a>
-                <a href="/?tab=zones" class="menu-item {'active' if tab == 'zones' else ''}">Zones & Radars</a>
-                <a href="/?tab=welcome" class="menu-item {'active' if tab == 'welcome' else ''}">Welcome / Goodbye</a>
-                <a href="/?tab=tasks" class="menu-item {'active' if tab == 'tasks' else ''}">Scheduled Tasks</a>
+                <a href="/?tab=dashboard" class="menu-item {'active' if tab == 'dashboard' else ''}">Dashboard & Admin Controls</a>
+                <a href="/?tab=economy" class="menu-item {'active' if tab == 'economy' else ''}">Economy & Shop</a>
+                <a href="/?tab=factions" class="menu-item {'active' if tab == 'factions' else ''}">Factions & Bounties</a>
+                <a href="/?tab=stats" class="menu-item {'active' if tab == 'stats' else ''}">Live Stats & Leaderboards</a>
             </ul>
         </div>
 
@@ -97,13 +94,10 @@ async def home(request: Request, tab: str = "dashboard"):
             </div>
 
             <div class="content">
-                {"<div class='card'><h2>Subscription & Server Dashboard</h2><p>Manage your bot license, view subscription status, and control billing.</p><div class='toggle-row'><span>Active Subscription Status</span><b style='color: #c084fc;'>Active ($12.99/mo)</b></div><div style='margin-top: 20px;'><form action='/create-portal-session' method='POST'><button type='submit' class='action-btn' style='background: #b91c1c;'>Cancel Subscription</button></form></div></div>" if tab == 'dashboard' else ""}
-                {"<div class='card'><h2>Currency Settings</h2><p>Customize custom emojis, starting balances, and automated role/job payouts.</p><div class='toggle-row'><span>Enable Currency Module</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><br><label style='color:#c084fc;'>Currency Name / Emoji</label><input type='text' class='form-input' value='🪙 Gold'><label style='color:#c084fc;'>Starting Balance for New Players</label><input type='number' class='form-input' value='5000'><button class='action-btn'>Save Currency Config</button></div>" if tab == 'currency' else ""}
-                {"<div class='card'><h2>Casino Payouts & Ratios</h2><p>Fine-tune win/loss percentages and specific payout multipliers for server games.</p><div class='toggle-row'><span>Enable Casino System</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><br><label style='color:#c084fc;'>Jackpot Payout Multiplier</label><input type='text' class='form-input' value='3.5x'><button class='action-btn'>Update Ratios</button></div>" if tab == 'casino' else ""}
-                {"<div class='card'><h2>Item & Vehicle Shop Builder</h2><p>Configure complete vehicle spawns, clothing, and item prices synced directly with your JSON configs.</p><div class='toggle-row'><span>Enable Custom Shop</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><br><p style='color:#a78bfa;'>JSON Sync Active: Complete vehicle spawns match server configuration parameters.</p></div>" if tab == 'shop' else ""}
-                {"<div class='card'><h2>Console Maps & Radar Zones</h2><p>Interactive map coordinate visualizer. Draw circular zones for 30-60 second precise player tracking, base radars, and gas zones.</p><div class='toggle-row'><span>High-Speed Player Radar (30-60s Ping)</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div></div>" if tab == 'zones' else ""}
-                {"<div class='card'><h2>Welcome & Goodbye Messages</h2><p>Configure automated entry greetings, departure notices, and reaction-role verification triggers.</p><label style='color:#c084fc;'>Custom Welcome Message</label><input type='text' class='form-input' value='Welcome to the server, user! Check the rules to get verified.'><button class='action-btn'>Save Messages</button></div>" if tab == 'welcome' else ""}
-                {"<div class='card'><h2>Scheduled Tasks & Server Automation</h2><p>Automate restarts, server wipes, and toggle base/container damage states.</p><div class='toggle-row'><span>Automated Server Restarts</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><div class='toggle-row'><span>Base & Container Damage Toggle</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><div style='margin-top:20px;'><button class='action-btn' style='background:#b91c1c;'>Trigger Manual Wipe</button></div></div>" if tab == 'tasks' else ""}
+                {"<div class='card'><h2>Admin Controls & Server Management</h2><p>Manage strict permissions, server restarts, wipes, and member moderation.</p><div class='toggle-row'><span>Admin-Locked Commands Restriction</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div><div style='margin-top:20px;'><button class='action-btn' style='background:#b91c1c; margin-right:10px;'>Trigger /restart</button><button class='action-btn' style='background:#b91c1c; margin-right:10px;'>Trigger /server wipe</button><button class='action-btn' style='background:#b91c1c;'>Trigger Vehicle Wipe</button></div><br><div style='margin-top:20px;'><form action='/create-portal-session' method='POST'><button type='submit' class='action-btn' style='background: #b91c1c;'>Cancel Subscription</button></form></div></div>" if tab == 'dashboard' else ""}
+                {"<div class='card'><h2>Economy, Bank & Shop</h2><p>Manage currency balances, cash/bank transfers, shops, and rentals.</p><label style='color:#c084fc;'>Starting Cash Balance</label><input type='number' class='form-input' value='2500'><button class='action-btn'>Save Economy Config</button></div>" if tab == 'economy' else ""}
+                {"<div class='card'><h2>Factions & Bounties System</h2><p>Configure faction creation rules and live bounty tracking coordinates.</p><div class='toggle-row'><span>Bounty Radar Coordinate Tracking</span><label class='switch'><input type='checkbox' checked><span class='slider'></span></label></div></div>" if tab == 'factions' else ""}
+                {"<div class='card'><h2>Live Stats & Leaderboards</h2><p>Real-time tracking for longest kills, headshots, kill/death streaks, and specific kill weapon data.</p><p style='color:#a78bfa;'>Status: Live-updating connection active.</p></div>" if tab == 'stats' else ""}
             </div>
         </div>
     </body>
@@ -200,7 +194,7 @@ async def customer_portal(request: Request):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# --- DISCORD BOT SETUP ---
+# --- DISCORD BOT SETUP & COMMANDS ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -214,25 +208,121 @@ async def on_ready():
     except Exception as e:
         print(e)
 
-@bot.tree.command(name="currency", description="Manage or check custom currency balances")
-async def currency_cmd(interaction: discord.Interaction, action: str, amount: int = 0):
-    await interaction.response.send_message(f"Currency action '{action}' executed with amount {amount}.", ephemeral=True)
+# --- Admin-Locked Server & Money Controls ---
+@bot.tree.command(name="restart", description="Restarts server (Admin Only)")
+async def restart_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions to execute this command.", ephemeral=True)
+        return
+    await interaction.response.send_message("🔄 Server restart sequence initiated.", ephemeral=True)
 
-@bot.tree.command(name="casino", description="Play custom casino games")
-async def casino_cmd(interaction: discord.Interaction, game: str, bet: int):
-    await interaction.response.send_message(f"Casino game {game} played with bet {bet}.", ephemeral=True)
+@bot.tree.command(name="server_wipe", description="Wipes server data (Admin Only)")
+async def server_wipe_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions to execute this command.", ephemeral=True)
+        return
+    await interaction.response.send_message("⚠️ Server wipe sequence initiated.", ephemeral=True)
 
-@bot.tree.command(name="shop", description="Browse or buy items and vehicles from shop")
-async def shop_cmd(interaction: discord.Interaction, item: str):
-    await interaction.response.send_message(f"Shop request processed for: {item}", ephemeral=True)
+@bot.tree.command(name="vehicle_wipe", description="Wipes and resets vehicles to spawns (Admin Only)")
+async def vehicle_wipe_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions to execute this command.", ephemeral=True)
+        return
+    await interaction.response.send_message("🚗 Vehicle wipe and reset completed.", ephemeral=True)
 
-@bot.tree.command(name="radar", description="Toggle or configure high-speed player radars")
-async def radar_cmd(interaction: discord.Interaction, state: str):
-    await interaction.response.send_message(f"Radar state set to: {state}", ephemeral=True)
+@bot.tree.command(name="add_money", description="Add money to player (Admin Only)")
+async def add_money_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions to execute this command.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"💰 Successfully added ${amount} to {member.mention}.", ephemeral=True)
 
-@bot.tree.command(name="server", description="Manage server tasks like restarts and wipes")
-async def server_cmd(interaction: discord.Interaction, action: str):
-    await interaction.response.send_message(f"Server task '{action}' initiated.", ephemeral=True)
+@bot.tree.command(name="remove_money", description="Remove money from player (Admin Only)")
+async def remove_money_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions to execute this command.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"💸 Successfully removed ${amount} from {member.mention}.", ephemeral=True)
+
+
+# --- Standard Economy & Gameplay Commands ---
+@bot.tree.command(name="balance", description="Shows your cash and bank balance")
+async def balance_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("💳 **Balance:** Cash: $1,200 | Bank: $5,400", ephemeral=True)
+
+@bot.tree.command(name="withdraw", description="Withdraws cash from bank")
+async def withdraw_cmd(interaction: discord.Interaction, amount: int):
+    await interaction.response.send_message(f"💵 Withdrew ${amount} from your bank account.", ephemeral=True)
+
+@bot.tree.command(name="dep_all", description="Deposits all cash into bank")
+async def dep_all_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("🏦 Deposited all cash into your bank safely.", ephemeral=True)
+
+@bot.tree.command(name="pay", description="Pays another player")
+async def pay_cmd(interaction: discord.Interaction, member: discord.Member, amount: int):
+    await interaction.response.send_message(f"🤝 Transferred ${amount} to {member.mention}.", ephemeral=True)
+
+@bot.tree.command(name="rob", description="Robs another player for up to 60% of their cash")
+async def rob_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(f"🥷 You attempted to rob {member.mention}!", ephemeral=True)
+
+@bot.tree.command(name="bounty", description="Place a bounty on a selected player and get their coordinates")
+async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
+    await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Last known coordinates: [11452.3, 4210.1]", ephemeral=True)
+
+
+# --- Factions & Shop ---
+@bot.tree.command(name="create_faction", description="Goes through faction creation process")
+async def create_faction_cmd(interaction: discord.Interaction, name: str):
+    await interaction.response.send_message(f"🛡️ Faction '{name}' setup initialized.", ephemeral=True)
+
+@bot.tree.command(name="add_faction_member", description="Add a member to your faction")
+async def add_faction_member_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(f"➕ Added {member.mention} to your faction.", ephemeral=True)
+
+@bot.tree.command(name="remove_faction_member", description="Remove a member from your faction")
+async def remove_faction_member_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(f"➖ Removed {member.mention} from your faction.", ephemeral=True)
+
+@bot.tree.command(name="shop", description="Buy items or vehicle rentals")
+async def shop_cmd(interaction: discord.Interaction, action: str, item_name: str):
+    await interaction.response.send_message(f"🛒 Shop transaction processed for {item_name} ({action}).", ephemeral=True)
+
+
+# --- Mini-Games ---
+@bot.tree.command(name="roulette", description="Play roulette")
+async def roulette_cmd(interaction: discord.Interaction, bet: int):
+    await interaction.response.send_message(f"🎲 Roulette wheel spun with a bet of ${bet}.", ephemeral=True)
+
+@bot.tree.command(name="blackjack", description="Play blackjack")
+async def blackjack_cmd(interaction: discord.Interaction, bet: int):
+    await interaction.response.send_message(f"🃏 Blackjack game started with a bet of ${bet}.", ephemeral=True)
+
+@bot.tree.command(name="cockfight", description="Play cockfight mini-game")
+async def cockfight_cmd(interaction: discord.Interaction, bet: int):
+    await interaction.response.send_message(f"🐓 Cockfight match initiated with a bet of ${bet}.", ephemeral=True)
+
+@bot.tree.command(name="dice", description="Roll dice")
+async def dice_cmd(interaction: discord.Interaction, bet: int):
+    await interaction.response.send_message(f"🎲 Dice rolled with a bet of ${bet}.", ephemeral=True)
+
+
+# --- Utilities & Stats ---
+@bot.tree.command(name="location", description="Locates yourself or others if admin")
+async def location_cmd(interaction: discord.Interaction, member: discord.Member = None):
+    if member and not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You require admin privileges to locate other members.", ephemeral=True)
+        return
+    target = member or interaction.user
+    await interaction.response.send_message(f"📍 Location for {target.name}: [12500.4, 3100.8]", ephemeral=True)
+
+@bot.tree.command(name="stats", description="Shows live-updating stats and leaderboards")
+async def stats_cmd(interaction: discord.Interaction):
+    await interaction.response.send_message("📊 **Live Leaderboards:**\n• Longest Kill: 840m (M4 Headshot)\n• Kill Streak: 12\n• Death Streak: 3", ephemeral=True)
+
+@bot.tree.command(name="punch", description="Virtually punch another member")
+async def punch_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.send_message(f"👊 {interaction.user.mention} winds up and virtually punches {member.mention} right in the jaw!", ephemeral=False)
 
 
 # --- RUN BOTH FASTAPI & DISCORD BOT CONCURRENTLY ---
@@ -240,9 +330,6 @@ def run_fastapi():
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 if __name__ == "__main__":
-    # Start FastAPI in a background thread
     fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
     fastapi_thread.start()
-    
-    # Run the Discord bot on the main thread
     bot.run(DISCORD_BOT_TOKEN)
