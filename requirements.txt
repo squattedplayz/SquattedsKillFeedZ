@@ -3,3 +3,4 @@ uvicorn
 discord.py
 requests
 pydantic
+stripe
