@@ -13,8 +13,8 @@ import stripe
 # --- CONFIGURATION ---
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/9B64grcDpcjx3RP3Gl67S00"
-DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
 DISCORD_OAUTH_INVITE = "https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&scope=bot%20applications.commands"
+DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
 
 ADMIN_EMAIL = "Dwayne.mashburn@gmail.com"
 ADMIN_PASSWORD = "Duanemashburn2!"
@@ -86,6 +86,10 @@ async def send_rcon_command(command: str) -> str:
 
 # --- FASTAPI WEB APP SETUP ---
 app = FastAPI()
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "SquattedKillFeed2"}
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request, tab: str = "dashboard"):
@@ -223,13 +227,16 @@ async def login_form_handler(email: str = Form(...), password: str = Form(...)):
     user = fake_users_db.get(email.strip().lower())
     if not user or user["password"] != password:
         raise HTTPException(status_code=400, detail="Invalid credentials")
-    if user["is_admin"]:
-        return RedirectResponse(url="/admin/dashboard", status_code=303)
-    return RedirectResponse(url="/", status_code=303)
+    
+    redirect_url = "/admin/dashboard" if user["is_admin"] else "/"
+    response = RedirectResponse(url=redirect_url, status_code=303)
+    response.set_cookie(key="user_email", value=email.strip())
+    return response
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(email: str = ADMIN_EMAIL):
-    if email != ADMIN_EMAIL:
+async def admin_dashboard(request: Request):
+    user_email = request.cookies.get("user_email", "")
+    if user_email.lower() != ADMIN_EMAIL.lower():
         raise HTTPException(status_code=403, detail="Access Forbidden")
     return """
     <!DOCTYPE html>
@@ -267,8 +274,9 @@ async def admin_dashboard(email: str = ADMIN_EMAIL):
     """
 
 @app.get("/create-checkout-session")
-async def create_checkout_session(request: Request, email: str = ADMIN_EMAIL):
-    if email == ADMIN_EMAIL:
+async def create_checkout_session(request: Request):
+    user_email = request.cookies.get("user_email", "")
+    if user_email.lower() == ADMIN_EMAIL.lower():
         return RedirectResponse(DISCORD_OAUTH_INVITE, status_code=303)
     return RedirectResponse(STRIPE_PAYMENT_LINK, status_code=303)
 
@@ -479,7 +487,7 @@ async def punch_cmd(interaction: discord.Interaction, member: discord.Member):
 
 # --- RUN BOTH FASTAPI & DISCORD BOT CONCURRENTLY ---
 def run_fastapi():
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="info")
 
 if __name__ == "__main__":
     fastapi_thread = threading.Thread(target=run_fastapi, daemon=True)
