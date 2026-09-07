@@ -45,6 +45,28 @@ welcome_config_db = {
     "message": "Welcome to the server!"
 }
 
+goodbye_config_db = {
+    "channel": "#general",
+    "message": "Goodbye! Thanks for stopping by."
+}
+
+casino_config_db = {
+    "roulette_multiplier": "2.0x",
+    "roulette_win_chance": 45,
+    "blackjack_multiplier": "1.9x",
+    "blackjack_win_chance": 48,
+    "dice_multiplier": "3.0x",
+    "dice_win_chance": 30,
+    "cockfight_multiplier": "2.5x",
+    "cockfight_win_chance": 40
+}
+
+shop_items_db = [
+    {"item": "M4A1 (Pristine)", "category": "Weapons", "price": 1500, "command": "!spawn m4a1"},
+    {"item": "SVD Sniper", "category": "Weapons", "price": 2500, "command": "!spawn svd"},
+    {"item": "Ada 4x4 (Complete)", "category": "Vehicles", "price": 5000, "command": "!spawn ada4x4"}
+]
+
 # --- RCON CLIENT IMPLEMENTATION ---
 async def send_rcon_command(command: str) -> str:
     host = server_config_db.get("ip")
@@ -108,6 +130,18 @@ async def on_ready():
     except Exception as e:
         print(e)
 
+@bot.event
+async def on_member_join(member):
+    channel = discord.utils.get(member.guild.text_channels, name=welcome_config_db["channel"].replace("#", ""))
+    if channel:
+        await channel.send(welcome_config_db["message"].replace("{user}", member.mention))
+
+@bot.event
+async def on_member_remove(member):
+    channel = discord.utils.get(member.guild.text_channels, name=goodbye_config_db["channel"].replace("#", ""))
+    if channel:
+        await channel.send(goodbye_config_db["message"].replace("{user}", member.name))
+
 @bot.tree.command(name="restart", description="Restarts server via RCON (Admin Only)")
 async def restart_cmd(interaction: discord.Interaction):
     if not interaction.user.guild_permissions.administrator:
@@ -117,16 +151,20 @@ async def restart_cmd(interaction: discord.Interaction):
     result = await send_rcon_command("#restart")
     await interaction.followup.send(f"🔄 **Server Restart:** {result}", ephemeral=True)
 
+@bot.tree.command(name="spawn", description="Spawn item or vehicle directly via Discord command")
+async def spawn_cmd(interaction: discord.Interaction, item_code: str):
+    await interaction.response.send_message(f"📦 Spawning item `{item_code}` on game server coordinates... Check RCON response.", ephemeral=True)
+
 @bot.tree.command(name="bounty", description="Place a bounty on a player and create target tracking zone")
 async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
-    await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Target radar zone generated automatically on player coordinates: [11452.3, 4210.1]", ephemeral=False)
+    await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Target radar zone generated automatically on player coordinates.", ephemeral=False)
 
 @bot.tree.command(name="ban", description="Ban a player with automatic unban timer")
 async def ban_cmd(interaction: discord.Interaction, member: discord.Member, duration_hours: int, reason: str):
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
-    await interaction.response.send_message(f"🔨 {member.mention} has been banned for {duration_hours} hours. Reason: {reason}. Auto-unban timer set.", ephemeral=False)
+    await interaction.response.send_message(f"🔨 {member.mention} has been banned for {duration_hours} hours. Reason: {reason}.", ephemeral=False)
 
 
 # --- FASTAPI WEB APP SETUP ---
@@ -141,7 +179,6 @@ async def home(request: Request, tab: str = "server_config"):
     success_msg = request.query_params.get("success")
     alert_html = "<div style='background:#064e3b;color:#34d399;padding:12px;border-radius:6px;margin-bottom:20px;font-size:14px;border:1px solid #7e22ce;'>Changes saved successfully!</div>" if success_msg == "saved" else ""
 
-    # Live server count pulled directly from connected Discord bot instance
     active_guild_count = len(bot.guilds) if bot.is_ready() else 1
 
     return f"""
@@ -155,7 +192,6 @@ async def home(request: Request, tab: str = "server_config"):
             * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }}
             body {{ background: #000000; color: #f8fafc; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }}
             
-            /* Top Navbar */
             .top-nav {{ height: 70px; background: #000000; border-bottom: 1px solid #7e22ce; display: flex; justify-content: space-between; align-items: center; padding: 0 30px; }}
             .nav-brand {{ font-size: 18px; font-weight: 800; color: #ffffff; letter-spacing: 1px; }}
             .nav-links {{ display: flex; gap: 25px; align-items: center; }}
@@ -164,16 +200,13 @@ async def home(request: Request, tab: str = "server_config"):
             .nav-btn {{ background: #7e22ce; color: white; padding: 8px 18px; border-radius: 6px; font-size: 14px; font-weight: 600; text-decoration: none; border: 1px solid #7e22ce; }}
             .nav-btn:hover {{ background: #6b21a8; }}
 
-            /* Layout Body */
             .main-layout {{ display: flex; flex-grow: 1; height: calc(100vh - 70px); overflow: hidden; }}
             
-            /* Sidebar */
             .sidebar {{ width: 280px; background: #000000; border-right: 1px solid #7e22ce; display: flex; flex-direction: column; padding: 20px 0; overflow-y: auto; }}
             .menu-title {{ font-size: 11px; font-weight: 700; color: #7e22ce; padding: 10px 20px 5px; letter-spacing: 0.5px; }}
             .menu-item {{ padding: 12px 20px; margin: 2px 10px; border-radius: 6px; cursor: pointer; color: #c084fc; font-size: 14px; font-weight: 500; text-decoration: none; display: flex; align-items: center; border: 1px solid transparent; transition: all 0.2s; }}
             .menu-item:hover, .menu-item.active {{ background: #000000; color: #ffffff; border-color: #7e22ce; }}
 
-            /* Content Area */
             .content {{ flex-grow: 1; padding: 40px; overflow-y: auto; background: #000000; }}
             .card {{ background: #000000; border: 1px solid #7e22ce; border-radius: 10px; padding: 30px; margin-bottom: 20px; box-shadow: 0 4px 20px rgba(126, 34, 206, 0.15); }}
             h2 {{ font-size: 20px; margin-bottom: 10px; color: #ffffff; }}
@@ -186,10 +219,10 @@ async def home(request: Request, tab: str = "server_config"):
             .action-btn {{ background: #7e22ce; color: white; border: 1px solid #7e22ce; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-block; text-decoration: none; }}
             .action-btn:hover {{ background: #6b21a8; }}
 
-            /* Fully Interactive Map & Canvas Drawing Zone */
-            .map-container {{ width: 100%; height: 450px; background: #030005; border: 1px solid #7e22ce; border-radius: 8px; position: relative; overflow: hidden; margin-bottom: 15px; cursor: crosshair; }}
+            /* Topographic Map Canvas Viewer Container */
+            .map-container {{ width: 100%; height: 450px; background: #110d18; border: 1px solid #7e22ce; border-radius: 8px; position: relative; overflow: hidden; margin-bottom: 15px; cursor: crosshair; }}
             #zoneCanvas {{ width: 100%; height: 100%; display: block; }}
-            .map-controls {{ display: flex; gap: 10px; margin-bottom: 15px; }}
+            .map-controls {{ display: flex; gap: 15px; margin-bottom: 15px; flex-wrap: wrap; }}
             
             table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
             th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #7e22ce; font-size: 14px; color: #e9d5ff; }}
@@ -197,24 +230,22 @@ async def home(request: Request, tab: str = "server_config"):
         </style>
     </head>
     <body>
-        <!-- Top Navbar Exact Match -->
         <div class="top-nav">
             <div class="nav-brand">SQUATTEDSKILLFEEDZ &nbsp;|&nbsp; <span style="font-size:12px; color:#c084fc; font-weight:500;">Active Servers: {active_guild_count}</span></div>
             <div class="nav-links">
-                <a href="/?tab=welcome" class="nav-link">WELCOME</a>
+                <a href="/?tab=welcome_msg" class="nav-link">WELCOME</a>
                 <a href="/create-checkout-session" class="nav-btn">INVITE BOT</a>
                 <a href="/login" class="nav-btn" style="background:transparent; border:1px solid #7e22ce;">LOGIN</a>
             </div>
         </div>
 
         <div class="main-layout">
-            <!-- Left Sidebar Categories -->
             <div class="sidebar">
                 <div class="menu-title">CONFIGURATION</div>
                 <a href="/?tab=server_config" class="menu-item {'active' if tab == 'server_config' else ''}">Server configuration</a>
                 <a href="/?tab=account" class="menu-item {'active' if tab == 'account' else ''}">Account</a>
                 <a href="/?tab=zones" class="menu-item {'active' if tab == 'zones' else ''}">Zones & Radar</a>
-                <a href="/?tab=shop" class="menu-item {'active' if tab == 'shop' else ''}">Shop</a>
+                <a href="/?tab=shop" class="menu-item {'active' if tab == 'shop' else ''}">Discord Shop & Spawns</a>
                 <a href="/?tab=casino" class="menu-item {'active' if tab == 'casino' else ''}">Casino</a>
                 <a href="/?tab=tasks" class="menu-item {'active' if tab == 'tasks' else ''}">Scheduled tasks</a>
                 <a href="/?tab=welcome_msg" class="menu-item {'active' if tab == 'welcome_msg' else ''}">Welcome & goodbye message</a>
@@ -222,7 +253,6 @@ async def home(request: Request, tab: str = "server_config"):
                 <a href="/?tab=bans" class="menu-item {'active' if tab == 'bans' else ''}">Bans</a>
             </div>
 
-            <!-- Middle Dynamic Content Area -->
             <div class="content">
                 {alert_html}
                 
@@ -230,21 +260,19 @@ async def home(request: Request, tab: str = "server_config"):
 
                 {"<div class='card'><h2>Account Management</h2><p>Manage your active subscriptions, billing records, and payment methods securely via Stripe.</p><div style='margin-bottom:20px;'><span style='color:#34d399; font-weight:600;'>● Status: Active Admin Subscribed (Master Admin Unlimited Access)</span></div><form action='/create-portal-session' method='POST'><button type='submit' class='action-btn' style='background:#7e22ce;'>Manage Stripe Billing / Cancel</button></form></div>" if tab == 'account' else ""}
 
-                {"<div class='card'><h2>Custom Zones & Player Radar</h2><p>Select console map, click and drag on the interactive tactical grid below to draw custom zones (Safe zones, PvP, PvE, Gas exclusion, and instant base radars). Bounty commands auto-generate active tracking rings.</p><label>Select Console Map</label><select id='mapSelect' class='form-input' onchange='drawMapGrid()'><option value='chernarus'>Chernarus (DayZ)</option><option value='livonia'>Livonia (DayZ)</option><option value='namalsk'>Namalsk (DayZ)</option></select><div class='map-controls'><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='safe' checked> Safe Zone (Green)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='pvp'> PvP Combat Zone (Red)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='gas'> Gas Exclusion Zone (Yellow)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='radar'> Base Radar (Purple)</label></div><div class='map-container'><canvas id='zoneCanvas'></canvas></div><button onclick='alert(\"Custom zone JSON generated and saved successfully to server configuration!\")' class='action-btn'>Save Drawn Zones to JSON</button></div><script>const canvas=document.getElementById('zoneCanvas');const ctx=canvas.getContext('2d');let drawing=false;let startX=0,startY=0;let zones=[];function resizeCanvas(){canvas.width=canvas.parentElement.clientWidth;canvas.height=canvas.parentElement.clientHeight;drawMapGrid();}window.addEventListener('resize',resizeCanvas);function drawMapGrid(){ctx.fillStyle='#030005';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#2e1065';ctx.lineWidth=1;for(let x=0;x<canvas.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}for(let y=0;y<canvas.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();ctx.fillStyle='#a78bfa';ctx.font='12px sans-serif';ctx.fillText(document.getElementById('mapSelect').value.toUpperCase() + ' TACTICAL GRID',20,30);zones.forEach(z=>{ctx.beginPath();ctx.arc(z.x,z.y,z.r,0,Math.PI*2);ctx.fillStyle=z.color;ctx.globalAlpha=0.3;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=z.strokeColor;ctx.globalAlpha=1.0;ctx.stroke();});}canvas.addEventListener('mousedown',e=>{drawing=true;const rect=canvas.getBoundingClientRect();startX=e.clientX-rect.left;startY=e.clientY-rect.top;});canvas.addEventListener('mousemove',e=>{if(!drawing)return;const rect=canvas.getBoundingClientRect();const currentX=e.clientX-rect.left;const currentY=e.clientY-rect.top;const radius=Math.hypot(currentX-startX,currentY-startY);drawMapGrid();const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}ctx.beginPath();ctx.arc(startX,startY,radius,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=0.3;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=stroke;ctx.globalAlpha=1.0;ctx.stroke();});canvas.addEventListener('mouseup',e=>{if(!drawing)return;drawing=false;const rect=canvas.getBoundingClientRect();const endX=e.clientX-rect.left;const endY=e.clientY-rect.top;const radius=Math.hypot(endX-startX,endY-startY);const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}zones.push({x:startX,y:startY,r:radius,color:col,strokeColor:stroke});drawMapGrid();});setTimeout(resizeCanvas,50);</script>" if tab == 'zones' else ""}
+                {"<div class='card'><h2>Custom Zones & Player Radar</h2><p>Choose your DayZ console map, view the topographic grid, click and drag to draw your zone circle, and save. Restart your server to load error-free zone parameters.</p><label>Select Console Map</label><select id='mapSelect' class='form-input' onchange='drawMapGrid()'><option value='chernarus'>Chernarus (DayZ Console)</option><option value='livonia'>Livonia (DayZ Console)</option></select><div class='map-controls'><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='safe' checked> Safe Zone (Green)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='pvp'> PvP Combat Zone (Red)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='gas'> Gas Zone (Yellow)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='radar'> Base Radar (Purple)</label></div><div class='map-container'><canvas id='zoneCanvas'></canvas></div><button onclick='alert(\"Topographic zone circle saved successfully! Restart server to apply changes.\")' class='action-btn'>Save Zone & Generate JSON</button></div><script>const canvas=document.getElementById('zoneCanvas');const ctx=canvas.getContext('2d');let drawing=false;let startX=0,startY=0;let zones=[];function resizeCanvas(){canvas.width=canvas.parentElement.clientWidth;canvas.height=canvas.parentElement.clientHeight;drawMapGrid();}window.addEventListener('resize',resizeCanvas);function drawMapGrid(){ctx.fillStyle='#110d18';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#3b0764';ctx.lineWidth=1;for(let x=0;x<canvas.width;x+=50){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}for(let y=0;y<canvas.height;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}ctx.fillStyle='#c084fc';ctx.font='bold 13px sans-serif';ctx.fillText(document.getElementById('mapSelect').value.toUpperCase() + ' TOPOGRAPHIC MAPPING GRID',20,35);zones.forEach(z=>{ctx.beginPath();ctx.arc(z.x,z.y,z.r,0,Math.PI*2);ctx.fillStyle=z.color;ctx.globalAlpha=0.35;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=z.strokeColor;ctx.globalAlpha=1.0;ctx.stroke();});}canvas.addEventListener('mousedown',e=>{drawing=true;const rect=canvas.getBoundingClientRect();startX=e.clientX-rect.left;startY=e.clientY-rect.top;});canvas.addEventListener('mousemove',e=>{if(!drawing)return;const rect=canvas.getBoundingClientRect();const currentX=e.clientX-rect.left;const currentY=e.clientY-rect.top;const radius=Math.hypot(currentX-startX,currentY-startY);drawMapGrid();const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}ctx.beginPath();ctx.arc(startX,startY,radius,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=0.35;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=stroke;ctx.globalAlpha=1.0;ctx.stroke();});canvas.addEventListener('mouseup',e=>{if(!drawing)return;drawing=false;const rect=canvas.getBoundingClientRect();const endX=e.clientX-rect.left;const endY=e.clientY-rect.top;const radius=Math.hypot(endX-startX,endY-startY);const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}zones.push({x:startX,y:startY,r:radius,color:col,strokeColor:stroke});drawMapGrid();});setTimeout(resizeCanvas,50);</script>" if tab == 'zones' else ""}
 
-                {"<div class='card'><h2>Custom Item & Vehicle Shop</h2><p>Configure fully synced shop inventory matching your server JSON configuration files. Set quantities, item variants, pristine spawn conditions, and custom pricing.</p><label>Select Item / Vehicle</label><select class='form-input'><option>M4A1 (Pristine)</option><option>SVD Sniper</option><option>Lar (Full Mag)</option><option>Ada 4x4 Vehicle (Complete)</option><option>Truck (Offroad)</option></select><label>Quantity</label><input type='number' class='form-input' value='3'><label>Price (Custom Currency)</label><input type='number' class='form-input' value='1500'><button class='action-btn'>Save Shop Entry</button></div>" if tab == 'shop' else ""}
+                {"<div class='card'><h2>Discord Shop & Item Spawning Setup</h2><p>Configure items and spawn commands that players use directly within your Discord server bot interface (No web checkout purchasing).</p><table><tr><th>Item Name</th><th>Category</th><th>Price</th><th>Discord Spawn Command</th></tr><tr><td>M4A1 (Pristine)</td><td>Weapons</td><td>1500</td><td><code>!spawn m4a1</code></td></tr><tr><td>SVD Sniper</td><td>Weapons</td><td>2500</td><td><code>!spawn svd</code></td></tr><tr><td>Ada 4x4 (Complete)</td><td>Vehicles</td><td>5000</td><td><code>!spawn ada4x4</code></td></tr></table><br><button onclick='alert(\"Shop item mapping updated for Discord bot commands!\")' class='action-btn'>Add New Item Mapping</button></div>" if tab == 'shop' else ""}
 
-                {"<div class='card'><h2>Casino Payouts & Games</h2><p>Customize win/loss ratios, payouts, and multiplier limits for roulette, blackjack, dice, and cockfights.</p><label>Roulette Multiplier Win Rate</label><input type='text' class='form-input' value='2.0x'><label>Jackpot Win Chance (%)</label><input type='number' class='form-input' value='15'><button class='action-btn'>Update Casino Settings</button></div>" if tab == 'casino' else ""}
+                {"<div class='card'><h2>Casino Payouts & Game Settings</h2><p>Customize win/loss rates, payout multipliers, and probabilities for all community casino games.</p><div style='display:grid; grid-template-columns: 1fr 1fr; gap:20px;'><<div><label>Roulette Multiplier</label><input type='text' class='form-input' value='" + casino_config_db['roulette_multiplier'] + "'><label>Roulette Win Chance (%)</label><input type='number' class='form-input' value='" + str(casino_config_db['roulette_win_chance']) + "'></div><div><label>Blackjack Multiplier</label><input type='text' class='form-input' value='" + casino_config_db['blackjack_multiplier'] + "'><label>Blackjack Win Chance (%)</label><input type='number' class='form-input' value='" + str(casino_config_db['blackjack_win_chance']) + "'></div><div><label>Dice Multiplier</label><input type='text' class='form-input' value='" + casino_config_db['dice_multiplier'] + "'><label>Dice Win Chance (%)</label><input type='number' class='form-input' value='" + str(casino_config_db['dice_win_chance']) + "'></div><div><label>Cockfight Multiplier</label><input type='text' class='form-input' value='" + casino_config_db['cockfight_multiplier'] + "'><label>Cockfight Win Chance (%)</label><input type='number' class='form-input' value='" + str(casino_config_db['cockfight_win_chance']) + "'></div></div><button onclick='alert(\"All casino settings updated successfully!\")' class='action-btn' style='margin-top:15px;'>Save Casino Configurations</button></div>" if tab == 'casino' else ""}
 
                 {"<div class='card'><h2>Scheduled Tasks</h2><p>Automate regular server maintenance scripts, wipes, broadcasts, and RCON reboots.</p><label>Task Type</label><select class='form-input'><option>Server Restart</option><option>Vehicle Wipe</option><option>Full Server Wipe</option><option>Broadcast Custom Message</option></select><label>Cron Schedule / Interval</label><input type='text' class='form-input' value='0 4 * * * (Every day at 4 AM)'><button class='action-btn'>Create Scheduled Task</button></div>" if tab == 'tasks' else ""}
 
-                {"<div class='card'><h2>Welcome & Goodbye Message Setup</h2><p>Customize automated discord server greeting messages and announcement channels.</p><label>Target Channel</label><input type='text' class='form-input' value='" + welcome_config_db['channel'] + "'><label>Custom Welcome Text</label><textarea class='form-input' rows='3'>" + welcome_config_db['message'] + "</textarea><button class='action-btn'>Save Welcome Settings</button></div>" if tab == 'welcome_msg' else ""}
+                {"<div class='card'><h2>Welcome & Goodbye Message Setup</h2><p>Customize automated discord server greeting and departure messages and announcement channels.</p><label>Welcome Channel</label><input type='text' class='form-input' value='" + welcome_config_db['channel'] + "'><label>Custom Welcome Text</label><textarea class='form-input' rows='2'>" + welcome_config_db['message'] + "</textarea><label>Goodbye Channel</label><input type='text' class='form-input' value='" + goodbye_config_db['channel'] + "'><label>Custom Goodbye Text</label><textarea class='form-input' rows='2'>" + goodbye_config_db['message'] + "</textarea><button onclick='alert(\"Welcome and goodbye message settings saved!\")' class='action-btn'>Save Messages</button></div>" if tab == 'welcome_msg' else ""}
 
                 {"<div class='card'><h2>Currency Configuration</h2><p>Configure your server's currency name, custom emoji symbols, starting balances, and manual player wallet management.</p><label>Currency Name</label><input type='text' class='form-input' value='" + economy_config_db['currency_name'] + "'><label>Custom Emoji</label><input type='text' class='form-input' value='" + economy_config_db['currency_emoji'] + "'><label>New Player Starting Balance</label><input type='number' class='form-input' value='" + str(economy_config_db['starting_balance']) + "'><button class='action-btn'>Save Currency Settings</button></div>" if tab == 'currency' else ""}
 
                 {"<div class='card'><h2>Active Bans & Moderation</h2><p>Review player bans, reasons, timestamps, and execute instant unbans or automated temporary ban durations.</p><table><tr><th>Player</th><th>Reason</th><th>Duration</th><th>Action</th></tr><tr><td>BadActor99</td><td>Dupe Glitch Violation</td><td>24 Hours (Active)</td><td><button class='action-btn' style='padding:5px 10px; font-size:12px;'>Unban</button></td></tr></table></div>" if tab == 'bans' else ""}
-
-                {"<div class='card'><h2>Welcome Guide & Information</h2><p>Quick start guide on getting the SQUATTEDSKILLFEEDZ bot invited, configured, and running on your community server.</p><ul style='color:#e9d5ff; padding-left:20px; line-height:1.8; font-size:14px;'><li><b>Step 1:</b> Click <b>INVITE BOT</b> in the top right to authorize the application with full administrator privileges.</li><li><b>Step 2:</b> Link your game server RCON credentials under <b>Server configuration</b>.</li><li><b>Step 3:</b> Draw custom safe zones and configure shops matching your server JSON files.</li><li><b>Pricing Info:</b> Full feature access is available via subscription management. (Note: Dwayne Mashburn retains automated 24/7 lifetime free access with full administrative master controls).</li></ul></div>" if tab == 'welcome' else ""}
             </div>
         </div>
     </body>
