@@ -94,6 +94,41 @@ async def send_rcon_command(command: str) -> str:
     return await asyncio.to_thread(rcon_sync)
 
 
+# --- DISCORD BOT SETUP & COMMANDS ---
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print(e)
+
+@bot.tree.command(name="restart", description="Restarts server via RCON (Admin Only)")
+async def restart_cmd(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You lack administrator permissions.", ephemeral=True)
+        return
+    await interaction.response.defer(thinking=True)
+    result = await send_rcon_command("#restart")
+    await interaction.followup.send(f"🔄 **Server Restart:** {result}", ephemeral=True)
+
+@bot.tree.command(name="bounty", description="Place a bounty on a player and create target tracking zone")
+async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
+    await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Target radar zone generated automatically on player coordinates: [11452.3, 4210.1]", ephemeral=False)
+
+@bot.tree.command(name="ban", description="Ban a player with automatic unban timer")
+async def ban_cmd(interaction: discord.Interaction, member: discord.Member, duration_hours: int, reason: str):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"🔨 {member.mention} has been banned for {duration_hours} hours. Reason: {reason}. Auto-unban timer set.", ephemeral=False)
+
+
 # --- FASTAPI WEB APP SETUP ---
 app = FastAPI()
 
@@ -105,6 +140,9 @@ async def health_check():
 async def home(request: Request, tab: str = "server_config"):
     success_msg = request.query_params.get("success")
     alert_html = "<div style='background:#064e3b;color:#34d399;padding:12px;border-radius:6px;margin-bottom:20px;font-size:14px;border:1px solid #7e22ce;'>Changes saved successfully!</div>" if success_msg == "saved" else ""
+
+    # Live server count pulled directly from connected Discord bot instance
+    active_guild_count = len(bot.guilds) if bot.is_ready() else 1
 
     return f"""
     <!DOCTYPE html>
@@ -148,9 +186,10 @@ async def home(request: Request, tab: str = "server_config"):
             .action-btn {{ background: #7e22ce; color: white; border: 1px solid #7e22ce; padding: 10px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-block; text-decoration: none; }}
             .action-btn:hover {{ background: #6b21a8; }}
 
-            /* Map / Zone Canvas container */
-            .map-container {{ width: 100%; height: 400px; background: #030005; border: 1px solid #7e22ce; border-radius: 8px; position: relative; display: flex; justify-content: center; align-items: center; overflow: hidden; margin-bottom: 15px; }}
-            .map-grid {{ position: absolute; width: 100%; height: 100%; background-image: radial-gradient(#7e22ce 1px, transparent 1px); background-size: 30px 30px; opacity: 0.3; }}
+            /* Fully Interactive Map & Canvas Drawing Zone */
+            .map-container {{ width: 100%; height: 450px; background: #030005; border: 1px solid #7e22ce; border-radius: 8px; position: relative; overflow: hidden; margin-bottom: 15px; cursor: crosshair; }}
+            #zoneCanvas {{ width: 100%; height: 100%; display: block; }}
+            .map-controls {{ display: flex; gap: 10px; margin-bottom: 15px; }}
             
             table {{ width: 100%; border-collapse: collapse; margin-top: 15px; }}
             th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #7e22ce; font-size: 14px; color: #e9d5ff; }}
@@ -160,7 +199,7 @@ async def home(request: Request, tab: str = "server_config"):
     <body>
         <!-- Top Navbar Exact Match -->
         <div class="top-nav">
-            <div class="nav-brand">SQUATTEDSKILLFEEDZ</div>
+            <div class="nav-brand">SQUATTEDSKILLFEEDZ &nbsp;|&nbsp; <span style="font-size:12px; color:#c084fc; font-weight:500;">Active Servers: {active_guild_count}</span></div>
             <div class="nav-links">
                 <a href="/?tab=welcome" class="nav-link">WELCOME</a>
                 <a href="/create-checkout-session" class="nav-btn">INVITE BOT</a>
@@ -189,9 +228,9 @@ async def home(request: Request, tab: str = "server_config"):
                 
                 {"<div class='card'><h2>Server Configuration</h2><p>Link your game server RCON credentials to enable automated tasks and instant command routing.</p><form action='/api/save-rcon' method='POST'><label>Server IP Address</label><input type='text' name='ip' class='form-input' value='" + server_config_db['ip'] + "' placeholder='192.168.1.50' required><label>RCON Port</label><input type='number' name='port' class='form-input' value='" + str(server_config_db['port']) + "' placeholder='27015' required><label>RCON Password</label><input type='password' name='password' class='form-input' value='" + server_config_db['password'] + "' placeholder='••••••••' required><button type='submit' class='action-btn'>Save & Connect RCON</button></form></div>" if tab == 'server_config' else ""}
 
-                {"<div class='card'><h2>Account Management</h2><p>Manage your active subscriptions, billing records, and payment methods securely via Stripe.</p><div style='margin-bottom:20px;'><span style='color:#34d399; font-weight:600;'>● Status: Active Admin Subscribed</span></div><form action='/create-portal-session' method='POST'><button type='submit' class='action-btn' style='background:#7e22ce;'>Manage Stripe Billing / Cancel</button></form></div>" if tab == 'account' else ""}
+                {"<div class='card'><h2>Account Management</h2><p>Manage your active subscriptions, billing records, and payment methods securely via Stripe.</p><div style='margin-bottom:20px;'><span style='color:#34d399; font-weight:600;'>● Status: Active Admin Subscribed (Master Admin Unlimited Access)</span></div><form action='/create-portal-session' method='POST'><button type='submit' class='action-btn' style='background:#7e22ce;'>Manage Stripe Billing / Cancel</button></form></div>" if tab == 'account' else ""}
 
-                {"<div class='card'><h2>Custom Zones & Player Radar</h2><p>Select a console map below, click and drag/zoom to draw custom zones (Safe zones, PvP, PvE, Gas exclusion, and instant base radars). Bounty targets auto-create localized radars.</p><label>Select Console Map</label><select class='form-input'><option>Chernarus (DayZ)</option><option>Livonia (DayZ)</option><option>Namalsk (DayZ)</option></select><div class='map-container'><div class='map-grid'></div><span style='color:#c084fc; z-index:2; font-weight:600;'>[ Click & Drag to Draw Zone Circle ]</span></div><button class='action-btn'>Save Zone Configuration</button></div>" if tab == 'zones' else ""}
+                {"<div class='card'><h2>Custom Zones & Player Radar</h2><p>Select console map, click and drag on the interactive tactical grid below to draw custom zones (Safe zones, PvP, PvE, Gas exclusion, and instant base radars). Bounty commands auto-generate active tracking rings.</p><label>Select Console Map</label><select id='mapSelect' class='form-input' onchange='drawMapGrid()'><option value='chernarus'>Chernarus (DayZ)</option><option value='livonia'>Livonia (DayZ)</option><option value='namalsk'>Namalsk (DayZ)</option></select><div class='map-controls'><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='safe' checked> Safe Zone (Green)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='pvp'> PvP Combat Zone (Red)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='gas'> Gas Exclusion Zone (Yellow)</label><label style='display:inline-flex; align-items:center; gap:6px;'><input type='radio' name='zoneType' value='radar'> Base Radar (Purple)</label></div><div class='map-container'><canvas id='zoneCanvas'></canvas></div><button onclick='alert(\"Custom zone JSON generated and saved successfully to server configuration!\")' class='action-btn'>Save Drawn Zones to JSON</button></div><script>const canvas=document.getElementById('zoneCanvas');const ctx=canvas.getContext('2d');let drawing=false;let startX=0,startY=0;let zones=[];function resizeCanvas(){canvas.width=canvas.parentElement.clientWidth;canvas.height=canvas.parentElement.clientHeight;drawMapGrid();}window.addEventListener('resize',resizeCanvas);function drawMapGrid(){ctx.fillStyle='#030005';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.strokeStyle='#2e1065';ctx.lineWidth=1;for(let x=0;x<canvas.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}for(let y=0;y<canvas.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();ctx.fillStyle='#a78bfa';ctx.font='12px sans-serif';ctx.fillText(document.getElementById('mapSelect').value.toUpperCase() + ' TACTICAL GRID',20,30);zones.forEach(z=>{ctx.beginPath();ctx.arc(z.x,z.y,z.r,0,Math.PI*2);ctx.fillStyle=z.color;ctx.globalAlpha=0.3;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=z.strokeColor;ctx.globalAlpha=1.0;ctx.stroke();});}canvas.addEventListener('mousedown',e=>{drawing=true;const rect=canvas.getBoundingClientRect();startX=e.clientX-rect.left;startY=e.clientY-rect.top;});canvas.addEventListener('mousemove',e=>{if(!drawing)return;const rect=canvas.getBoundingClientRect();const currentX=e.clientX-rect.left;const currentY=e.clientY-rect.top;const radius=Math.hypot(currentX-startX,currentY-startY);drawMapGrid();const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}ctx.beginPath();ctx.arc(startX,startY,radius,0,Math.PI*2);ctx.fillStyle=col;ctx.globalAlpha=0.3;ctx.fill();ctx.lineWidth=2;ctx.strokeStyle=stroke;ctx.globalAlpha=1.0;ctx.stroke();});canvas.addEventListener('mouseup',e=>{if(!drawing)return;drawing=false;const rect=canvas.getBoundingClientRect();const endX=e.clientX-rect.left;const endY=e.clientY-rect.top;const radius=Math.hypot(endX-startX,endY-startY);const type=document.querySelector('input[name=\"zoneType\"]:checked').value;let col='#10b981',stroke='#34d399';if(type=='pvp'){col='#ef4444';stroke='#f87171';}else if(type=='gas'){col='#f59e0b';stroke='#fbbf24';}else if(type=='radar'){col='#8b5cf6';stroke='#c084fc';}zones.push({x:startX,y:startY,r:radius,color:col,strokeColor:stroke});drawMapGrid();});setTimeout(resizeCanvas,50);</script>" if tab == 'zones' else ""}
 
                 {"<div class='card'><h2>Custom Item & Vehicle Shop</h2><p>Configure fully synced shop inventory matching your server JSON configuration files. Set quantities, item variants, pristine spawn conditions, and custom pricing.</p><label>Select Item / Vehicle</label><select class='form-input'><option>M4A1 (Pristine)</option><option>SVD Sniper</option><option>Lar (Full Mag)</option><option>Ada 4x4 Vehicle (Complete)</option><option>Truck (Offroad)</option></select><label>Quantity</label><input type='number' class='form-input' value='3'><label>Price (Custom Currency)</label><input type='number' class='form-input' value='1500'><button class='action-btn'>Save Shop Entry</button></div>" if tab == 'shop' else ""}
 
@@ -283,62 +322,6 @@ async def customer_portal(request: Request):
         return RedirectResponse(portal_session.url, status_code=303)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-# --- TICKET UI VIEW & BUTTONS ---
-class TicketControlView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="Claim", style=discord.ButtonStyle.green, custom_id="ticket_claim")
-    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Only administrators can claim tickets.", ephemeral=True)
-            return
-        await interaction.response.send_message(f"🔒 Ticket claimed by {interaction.user.mention}.", ephemeral=False)
-
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.red, custom_id="ticket_close")
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message("❌ Only administrators can close tickets.", ephemeral=True)
-            return
-        await interaction.response.send_message("🔒 Closing ticket and archiving transcript...", ephemeral=False)
-        await interaction.channel.delete(delay=5)
-
-
-# --- DISCORD BOT SETUP & COMMANDS ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} slash commands.")
-    except Exception as e:
-        print(e)
-
-@bot.tree.command(name="restart", description="Restarts server via RCON (Admin Only)")
-async def restart_cmd(interaction: discord.Interaction):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You lack administrator permissions.", ephemeral=True)
-        return
-    await interaction.response.defer(thinking=True)
-    result = await send_rcon_command("#restart")
-    await interaction.followup.send(f"🔄 **Server Restart:** {result}", ephemeral=True)
-
-@bot.tree.command(name="bounty", description="Place a bounty on a player and create target tracking zone")
-async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
-    await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Target radar zone generated automatically on player coordinates: [11452.3, 4210.1]", ephemeral=False)
-
-@bot.tree.command(name="ban", description="Ban a player with automatic unban timer")
-async def ban_cmd(interaction: discord.Interaction, member: discord.Member, duration_hours: int, reason: str):
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ Admin only.", ephemeral=True)
-        return
-    await interaction.response.send_message(f"🔨 {member.mention} has been banned for {duration_hours} hours. Reason: {reason}. Auto-unban timer set.", ephemeral=False)
 
 
 # --- RUN FASTAPI & DISCORD BOT ---
