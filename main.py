@@ -14,6 +14,7 @@ import stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
 STRIPE_PAYMENT_LINK = "https://buy.stripe.com/9B64grcDpcjx3RP3Gl67S00"
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
+DISCORD_OAUTH_INVITE = "https://discord.com/api/oauth2/authorize?client_id=YOUR_CLIENT_ID&permissions=8&scope=bot%20applications.commands"
 
 ADMIN_EMAIL = "Dwayne.mashburn@gmail.com"
 ADMIN_PASSWORD = "Duanemashburn2!"
@@ -266,7 +267,9 @@ async def admin_dashboard(email: str = ADMIN_EMAIL):
     """
 
 @app.get("/create-checkout-session")
-async def create_checkout_session(request: Request):
+async def create_checkout_session(request: Request, email: str = ADMIN_EMAIL):
+    if email == ADMIN_EMAIL:
+        return RedirectResponse(DISCORD_OAUTH_INVITE, status_code=303)
     return RedirectResponse(STRIPE_PAYMENT_LINK, status_code=303)
 
 @app.post("/create-portal-session")
