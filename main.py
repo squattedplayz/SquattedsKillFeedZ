@@ -2,31 +2,91 @@ import os
 import asyncio
 import socket
 import struct
+import sqlite3
 import discord
 from discord.ext import commands
 import stripe
 
 # --- CONFIGURATION ---
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
-STRIPE_PAYMENT_LINK = "https://buy.stripe.com/9B64grcDpcjx3RP3Gl67S00"
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
 
 MASTER_ADMIN_ID = 578271264779665438
 
-active_subscriptions_db = {}
-server_config_db = {"ip": "", "port": 27015, "password": ""}
-welcome_config_db = {"channel": "general", "message": "Welcome to the server, {user}!"}
-goodbye_config_db = {"channel": "general", "message": "Goodbye, {user}! Thanks for stopping by."}
-casino_config_db = {"roulette_multiplier": "2.0x", "roulette_win_chance": 45}
-shop_items_db = []
-active_player_channel_db = {}
-player_balances_db = {}  # user_id: {"cash": int, "bank": int}
-killfeed_config_db = {}  # guild_id: bool
-zones_db = {}  # guild_id: [zone_data, ...]
-bounties_db = {}  # target_id: {"amount": int, setter_id: int}
+# --- SQLITE DATABASE SETUP (100% Persistent) ---
+db_conn = sqlite3.connect("dayz_bot.db", check_same_thread=False)
+db_cursor = db_conn.cursor()
+
+db_cursor.executescript("""
+CREATE TABLE IF NOT EXISTS subscriptions (
+    guild_id INTEGER PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS server_config (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+
+CREATE TABLE IF NOT EXISTS welcome_config (
+    guild_id INTEGER PRIMARY KEY,
+    channel TEXT,
+    message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS goodbye_config (
+    guild_id INTEGER PRIMARY KEY,
+    channel TEXT,
+    message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shop_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id INTEGER,
+    item_name TEXT,
+    category TEXT,
+    price INTEGER,
+    command TEXT
+);
+
+CREATE TABLE IF NOT EXISTS player_balances (
+    user_id INTEGER PRIMARY KEY,
+    cash INTEGER,
+    bank INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS player_links (
+    discord_id INTEGER PRIMARY KEY,
+    gamertag TEXT
+);
+
+CREATE TABLE IF NOT EXISTS whitelist (
+    guild_id INTEGER,
+    gamertag TEXT
+);
+
+CREATE TABLE IF NOT EXISTS killfeed_config (
+    guild_id INTEGER PRIMARY KEY,
+    enabled INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS bounties (
+    target_id INTEGER PRIMARY KEY,
+    amount INTEGER,
+    setter_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS ticket_stats (
+    metric TEXT PRIMARY KEY,
+    count INTEGER
+);
+""")
+
+db_cursor.execute("INSERT OR IGNORE INTO ticket_stats (metric, count) VALUES ('open', 0)")
+db_cursor.execute("INSERT OR IGNORE INTO ticket_stats (metric, count) VALUES ('closed', 5)")
+db_conn.commit()
 
 
-# --- ACCESS & SUBSCRIPTION CHECK ---
+# --- ACCESS & SUBSCRIPTION CHECK (100% In-Discord Management) ---
 async def verify_server_access(interaction: discord.Interaction) -> bool:
     if interaction.user.id == MASTER_ADMIN_ID:
         return True
@@ -38,21 +98,60 @@ async def verify_server_access(interaction: discord.Interaction) -> bool:
         if interaction.guild.owner_id == MASTER_ADMIN_ID:
             return True
             
-    if interaction.guild.id in active_subscriptions_db:
+    db_cursor.execute("SELECT 1 FROM subscriptions WHERE guild_id = ?", (interaction.guild.id,))
+    if db_cursor.fetchone():
         return True
         
     await interaction.response.send_message(
-        f"🔒 **Access Restricted:** This server requires an active subscription of **$12.99/month** to use bot commands.\n\n[Click Here to Subscribe via Stripe]({STRIPE_PAYMENT_LINK})",
+        "🔒 **Access Restricted:** This server requires an active subscription of **$12.99/month** to use bot commands.\n\nClick the button below to generate your secure in-Discord Stripe checkout link.",
+        view=SubscriptionPayView(),
         ephemeral=True
     )
     return False
 
+class SubscriptionPayView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="💳 Pay $12.99/mo via Stripe", style=discord.ButtonStyle.success, custom_id="stripe_pay_btn")
+    async def pay_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': 'usd',
+                        'product_data': {'name': f'SquattedSkillFeedZ Bot Subscription ({interaction.guild.name})'},
+                        'unit_amount': 1299,
+                        'recurring': {'interval': 'month'}
+                    },
+                    'quantity': 1,
+                }],
+                mode='subscription',
+                success_url=f"https://discord.com/channels/{interaction.guild.id}",
+                cancel_url=f"https://discord.com/channels/{interaction.guild.id}",
+                client_reference_id=str(interaction.guild.id)
+            )
+            await interaction.response.send_message(
+                f"✅ **Stripe Checkout Ready:** Click the link below to complete your secure subscription payment:\n\n{session.url}",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error creating Stripe session: {str(e)}", ephemeral=True)
+
 
 # --- RCON CLIENT IMPLEMENTATION ---
 async def send_rcon_command(command: str) -> str:
-    host = server_config_db.get("ip")
-    port = int(server_config_db.get("port", 27015))
-    password = server_config_db.get("password")
+    db_cursor.execute("SELECT value FROM server_config WHERE key = 'ip'")
+    row_ip = db_cursor.fetchone()
+    db_cursor.execute("SELECT value FROM server_config WHERE key = 'port'")
+    row_port = db_cursor.fetchone()
+    db_cursor.execute("SELECT value FROM server_config WHERE key = 'password'")
+    row_pw = db_cursor.fetchone()
+
+    host = row_ip[0] if row_ip else ""
+    port = int(row_port[0]) if row_port and row_port[0] else 27015
+    password = row_pw[0] if row_pw else ""
 
     if not host or not password:
         return "❌ RCON configuration missing. Use `/server config` to set up your server."
@@ -126,23 +225,33 @@ async def on_guild_join(guild):
         if channel.permissions_for(guild.me).send_messages:
             embed = discord.Embed(
                 title="🔒 Subscription Required",
-                description=f"Thank you for inviting SquattedSkillFeedZ! This bot requires an active subscription of **$12.99/month** to operate.\n\n[Click Here to Subscribe via Stripe]({STRIPE_PAYMENT_LINK})\n\nOnce subscribed, your server access will unlock automatically.",
+                description="Thank you for inviting SquattedSkillFeedZ! This bot requires an active subscription of **$12.99/month** to operate.\n\nClick the button below to subscribe instantly inside Discord.",
                 color=0x7e22ce
             )
-            await channel.send(embed=embed)
+            await channel.send(embed=embed, view=SubscriptionPayView())
             break
 
 @bot.event
 async def on_member_join(member):
-    channel = discord.utils.get(member.guild.text_channels, name=welcome_config_db["channel"].replace("#", ""))
+    db_cursor.execute("SELECT channel, message FROM welcome_config WHERE guild_id = ?", (member.guild.id,))
+    row = db_cursor.fetchone()
+    channel_name = row[0] if row else "general"
+    msg_template = row[1] if row else "Welcome to the server, {user}!"
+    
+    channel = discord.utils.get(member.guild.text_channels, name=channel_name.replace("#", ""))
     if channel:
-        await channel.send(welcome_config_db["message"].replace("{user}", member.mention))
+        await channel.send(msg_template.replace("{user}", member.mention))
 
 @bot.event
 async def on_member_remove(member):
-    channel = discord.utils.get(member.guild.text_channels, name=goodbye_config_db["channel"].replace("#", ""))
+    db_cursor.execute("SELECT channel, message FROM goodbye_config WHERE guild_id = ?", (member.guild.id,))
+    row = db_cursor.fetchone()
+    channel_name = row[0] if row else "general"
+    msg_template = row[1] if row else "Goodbye, {user}! Thanks for stopping by."
+    
+    channel = discord.utils.get(member.guild.text_channels, name=channel_name.replace("#", ""))
     if channel:
-        await channel.send(goodbye_config_db["message"].replace("{user}", member.name))
+        await channel.send(msg_template.replace("{user}", member.name))
 
 
 # --- MASTER ADMIN EXCLUSIVE COMMANDS ---
@@ -152,11 +261,16 @@ async def active_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Access denied. This command is restricted to the Master Admin.", ephemeral=True)
         return
 
+    db_cursor.execute("SELECT count FROM ticket_stats WHERE metric = 'open'")
+    open_t = db_cursor.fetchone()[0]
+    db_cursor.execute("SELECT count FROM ticket_stats WHERE metric = 'closed'")
+    closed_t = db_cursor.fetchone()[0]
+
     server_names = [guild.name for guild in bot.guilds]
     embed = discord.Embed(title="👑 Master Admin Dashboard - /active", color=0x7e22ce)
     embed.add_field(name="Active Bot Servers Count", value=str(len(bot.guilds)), inline=False)
     embed.add_field(name="Server List", value="\n".join([f"• {name}" for name in server_names]) if server_names else "No servers found.", inline=False)
-    embed.add_field(name="Tickets Overview", value="Open Tickets: 2 | Closed Tickets: 5", inline=False)
+    embed.add_field(name="Tickets Overview", value=f"Open Tickets: {open_t} | Closed Tickets: {closed_t}", inline=False)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="grantaccess", description="Master Admin Only: Instantly grant free lifetime access to this server.")
@@ -164,35 +278,181 @@ async def grantaccess_cmd(interaction: discord.Interaction):
     if interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Access denied.", ephemeral=True)
         return
-    active_subscriptions_db[interaction.guild.id] = True
+    db_cursor.execute("INSERT OR IGNORE INTO subscriptions (guild_id) VALUES (?)", (interaction.guild.id,))
+    db_conn.commit()
     await interaction.response.send_message(f"✅ Lifetime subscription successfully granted to **{interaction.guild.name}**!", ephemeral=True)
 
 
-# --- SERVER & RCON CONFIGURATION ---
+# --- TICKET SYSTEM ---
+class CloseTicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🔒 Close Ticket", style=discord.ButtonStyle.danger, custom_id="close_ticket_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+            await interaction.response.send_message("❌ Administrator permission required to close tickets.", ephemeral=True)
+            return
+        
+        db_cursor.execute("UPDATE ticket_stats SET count = MAX(0, count - 1) WHERE metric = 'open'")
+        db_cursor.execute("UPDATE ticket_stats SET count = count + 1 WHERE metric = 'closed'")
+        db_conn.commit()
+
+        await interaction.response.send_message("🔒 Closing ticket channel in 5 seconds...", ephemeral=False)
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete()
+        except Exception:
+            pass
+
+class TicketSetupView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="🎫 Create Ticket", style=discord.ButtonStyle.primary, custom_id="create_ticket_btn")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        guild = interaction.guild
+        category = discord.utils.get(guild.categories, name="Support Tickets")
+        if not category:
+            try:
+                category = await guild.create_category("Support Tickets")
+            except Exception:
+                category = None
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+        }
+
+        ticket_channel = await guild.create_text_channel(
+            f"ticket-{interaction.user.name}",
+            category=category,
+            overwrites=overwrites
+        )
+
+        db_cursor.execute("UPDATE ticket_stats SET count = count + 1 WHERE metric = 'open'")
+        db_conn.commit()
+
+        embed = discord.Embed(
+            title=f"Support Ticket - {interaction.user.display_name}",
+            description="Please describe your issue, report, or inquiry below. An administrator will be with you shortly.",
+            color=0x7e22ce
+        )
+        await ticket_channel.send(content=interaction.user.mention, embed=embed, view=CloseTicketView())
+        await interaction.response.send_message(f"✅ Ticket created successfully! Head over to {ticket_channel.mention}.", ephemeral=True)
+
+@bot.tree.command(name="ticketsetup", description="Admin Only: Deploy the persistent ticket creation panel.")
+async def ticketsetup_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    
+    embed = discord.Embed(
+        title="🎫 Server Support & Help Desk",
+        description="Click the button below to open a private support ticket with server staff and administrators.",
+        color=0x7e22ce
+    )
+    await interaction.channel.send(embed=embed, view=TicketSetupView())
+    await interaction.response.send_message("✅ Ticket panel deployed in this channel!", ephemeral=True)
+
+
+# --- CONSOLE & SERVER CONFIGURATION ---
 @bot.tree.command(name="server", description="Configure your DayZ console server RCON settings (Admin only).")
 async def server_config_cmd(interaction: discord.Interaction, ip: str, port: int, password: str):
     if not await verify_server_access(interaction):
         return
-    if not interaction.user.guild_permissions.administrator:
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     
-    server_config_db["ip"] = ip
-    server_config_db["port"] = port
-    server_config_db["password"] = password
+    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('ip', ?)", (ip,))
+    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('port', ?)", (str(port),))
+    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('password', ?)", (password,))
+    db_conn.commit()
+
     await interaction.response.send_message(f"✅ Server configuration saved successfully for **{ip}:{port}**!", ephemeral=True)
+
+@bot.tree.command(name="link", description="Link your Xbox Gamertag or PSN ID to your Discord profile.")
+async def link_cmd(interaction: discord.Interaction, gamertag: str):
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO player_links (discord_id, gamertag) VALUES (?, ?)", (interaction.user.id, gamertag))
+    db_conn.commit()
+    await interaction.response.send_message(f"✅ Successfully linked your profile to console Gamertag: **{gamertag}**!", ephemeral=True)
+
+@bot.tree.command(name="whitelist", description="Admin Only: Add or remove players from the console whitelist database.")
+async def whitelist_cmd(interaction: discord.Interaction, action: str, gamertag: str):
+    if not await verify_server_access(interaction):
+        return
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    
+    if action.lower() == "add":
+        db_cursor.execute("INSERT INTO whitelist (guild_id, gamertag) VALUES (?, ?)", (interaction.guild.id, gamertag))
+        db_conn.commit()
+        await interaction.response.send_message(f"✅ Added **{gamertag}** to the server whitelist database.", ephemeral=True)
+    elif action.lower() == "remove":
+        db_cursor.execute("DELETE FROM whitelist WHERE guild_id = ? AND gamertag = ?", (interaction.guild.id, gamertag))
+        db_conn.commit()
+        await interaction.response.send_message(f"🗑️ Removed **{gamertag}** from the server whitelist database.", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Use `/whitelist add [gamertag]` or `/whitelist remove [gamertag]`.", ephemeral=True)
+
+@bot.tree.command(name="welcomeset", description="Admin Only: Customize the welcome announcement channel and message.")
+async def welcomeset_cmd(interaction: discord.Interaction, channel_name: str, message: str):
+    if not await verify_server_access(interaction):
+        return
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO welcome_config (guild_id, channel, message) VALUES (?, ?, ?)", (interaction.guild.id, channel_name, message))
+    db_conn.commit()
+    await interaction.response.send_message(f"✅ Welcome settings updated! Channel: **{channel_name}**", ephemeral=True)
+
+@bot.tree.command(name="goodbyeset", description="Admin Only: Customize the goodbye announcement channel and message.")
+async def goodbyeset_cmd(interaction: discord.Interaction, channel_name: str, message: str):
+    if not await verify_server_access(interaction):
+        return
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+        await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO goodbye_config (guild_id, channel, message) VALUES (?, ?, ?)", (interaction.guild.id, channel_name, message))
+    db_conn.commit()
+    await interaction.response.send_message(f"✅ Goodbye settings updated! Channel: **{channel_name}**", ephemeral=True)
+
+@bot.tree.command(name="info", description="Display server rules, connection info, and maps.")
+async def info_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
+    embed = discord.Embed(title="📜 DayZ Console Server Information", description="Official community guidelines, map configurations, and support center.", color=0x7e22ce)
+    embed.add_field(name="🗺️ Supported Maps", value="• Chernarus\n• Livonia\n• Sakhal", inline=False)
+    embed.add_field(name="⚖️ Core Rules", value="1. No base glitching or exploiting.\n2. Respect all players and admins.\n3. Use support tickets for server issues.", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=False)
 
 
 # --- ECONOMY & BANKING SYSTEM ---
+def get_balance(user_id: int):
+    db_cursor.execute("SELECT cash, bank FROM player_balances WHERE user_id = ?", (user_id,))
+    row = db_cursor.fetchone()
+    if not row:
+        db_cursor.execute("INSERT INTO player_balances (user_id, cash, bank) VALUES (?, 500, 1000)", (user_id,))
+        db_conn.commit()
+        return 500, 1000
+    return row[0], row[1]
+
 @bot.tree.command(name="balance", description="Check your cash and bank account balances.")
 async def balance_cmd(interaction: discord.Interaction, member: discord.Member = None):
     if not await verify_server_access(interaction):
         return
     target = member or interaction.user
-    data = player_balances_db.get(target.id, {"cash": 500, "bank": 1000})
+    cash, bank = get_balance(target.id)
     embed = discord.Embed(title=f"💰 Balance for {target.display_name}", color=0x7e22ce)
-    embed.add_field(name="Cash", value=f"${data['cash']}", inline=True)
-    embed.add_field(name="Bank", value=f"${data['bank']}", inline=True)
+    embed.add_field(name="Cash", value=f"${cash}", inline=True)
+    embed.add_field(name="Bank", value=f"${bank}", inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 @bot.tree.command(name="pay", description="Transfer physical cash to another player.")
@@ -203,50 +463,53 @@ async def pay_cmd(interaction: discord.Interaction, member: discord.Member, amou
         await interaction.response.send_message("❌ Amount must be greater than zero.", ephemeral=True)
         return
     
-    sender_data = player_balances_db.setdefault(interaction.user.id, {"cash": 500, "bank": 1000})
-    if sender_data["cash"] < amount:
+    sender_cash, sender_bank = get_balance(interaction.user.id)
+    if sender_cash < amount:
         await interaction.response.send_message("❌ You do not have enough cash on hand.", ephemeral=True)
         return
     
-    receiver_data = player_balances_db.setdefault(member.id, {"cash": 500, "bank": 1000})
-    sender_data["cash"] -= amount
-    receiver_data["cash"] += amount
+    receiver_cash, receiver_bank = get_balance(member.id)
+    db_cursor.execute("UPDATE player_balances SET cash = cash - ? WHERE user_id = ?", (amount, interaction.user.id))
+    db_cursor.execute("UPDATE player_balances SET cash = cash + ? WHERE user_id = ?", (amount, member.id))
+    db_conn.commit()
     await interaction.response.send_message(f"✅ Successfully transferred **${amount}** to {member.mention}!", ephemeral=True)
 
 @bot.tree.command(name="withdraw", description="Withdraw money from your bank account to cash.")
 async def withdraw_cmd(interaction: discord.Interaction, amount: int):
     if not await verify_server_access(interaction):
         return
-    data = player_balances_db.setdefault(interaction.user.id, {"cash": 500, "bank": 1000})
-    if data["bank"] < amount:
+    cash, bank = get_balance(interaction.user.id)
+    if bank < amount:
         await interaction.response.send_message("❌ Insufficient funds in bank.", ephemeral=True)
         return
-    data["bank"] -= amount
-    data["cash"] += amount
+    db_cursor.execute("UPDATE player_balances SET cash = cash + ?, bank = bank - ? WHERE user_id = ?", (amount, amount, interaction.user.id))
+    db_conn.commit()
     await interaction.response.send_message(f"✅ Withdrew **${amount}** to cash.", ephemeral=True)
 
 @bot.tree.command(name="deposit", description="Deposit all cash safely into your bank account.")
 async def deposit_all_cmd(interaction: discord.Interaction):
     if not await verify_server_access(interaction):
         return
-    data = player_balances_db.setdefault(interaction.user.id, {"cash": 500, "bank": 1000})
-    amount = data["cash"]
-    data["cash"] = 0
-    data["bank"] += amount
-    await interaction.response.send_message(f"✅ Deposited all cash (**${amount}**) securely into your bank.", ephemeral=True)
+    cash, bank = get_balance(interaction.user.id)
+    if cash <= 0:
+        await interaction.response.send_message("❌ You have no cash on hand to deposit.", ephemeral=True)
+        return
+    db_cursor.execute("UPDATE player_balances SET cash = 0, bank = bank + ? WHERE user_id = ?", (cash, interaction.user.id))
+    db_conn.commit()
+    await interaction.response.send_message(f"✅ Deposited all cash (**${cash}**) securely into your bank.", ephemeral=True)
 
 @bot.tree.command(name="rob", description="Attempt to rob another player's cash on hand.")
 async def rob_cmd(interaction: discord.Interaction, member: discord.Member):
     if not await verify_server_access(interaction):
         return
-    target_data = player_balances_db.setdefault(member.id, {"cash": 500, "bank": 1000})
-    if target_data["cash"] <= 0:
+    target_cash, target_bank = get_balance(member.id)
+    if target_cash <= 0:
         await interaction.response.send_message(f"❌ {member.display_name} has no cash on hand to rob.", ephemeral=True)
         return
-    stolen = int(target_data["cash"] * 0.25)  # 25% default rob percentage
-    target_data["cash"] -= stolen
-    sender_data = player_balances_db.setdefault(interaction.user.id, {"cash": 500, "bank": 1000})
-    sender_data["cash"] += stolen
+    stolen = int(target_cash * 0.25)
+    db_cursor.execute("UPDATE player_balances SET cash = cash - ? WHERE user_id = ?", (stolen, member.id))
+    db_cursor.execute("UPDATE player_balances SET cash = cash + ? WHERE user_id = ?", (stolen, interaction.user.id))
+    db_conn.commit()
     await interaction.response.send_message(f"🥷 You successfully robbed **${stolen}** from {member.mention}!", ephemeral=True)
 
 
@@ -259,28 +522,31 @@ class ShopCartModal(discord.ui.Modal, title="Checkout Coordinates"):
         await interaction.response.send_message(f"✅ Checkout complete! Items will spawn at coordinates **{self.coordinates.value}** on the next server restart.", ephemeral=True)
 
 class ShopSelect(discord.ui.Select):
-    def __init__(self):
-        options = [discord.SelectOption(label=i["item"], description=f"${i['price']} - {i['category']}") for i in shop_items_db[:25]] if shop_items_db else [discord.SelectOption(label="No items available", description="Admin must create items first")]
+    def __init__(self, items):
+        options = [discord.SelectOption(label=i[1], description=f"${i[3]} - {i[2]}") for i in items[:25]]
         super().__init__(placeholder="Select items to add to your cart...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        if not shop_items_db:
-            await interaction.response.send_message("❌ The shop is empty.", ephemeral=True)
-            return
         await interaction.response.send_modal(ShopCartModal())
 
 class ShopView(discord.ui.View):
-    def __init__(self):
+    def __init__(self, items):
         super().__init__(timeout=None)
-        if shop_items_db:
-            self.add_item(ShopSelect())
+        self.add_item(ShopSelect(items))
 
 @bot.tree.command(name="shop", description="Browse and buy native DayZ console items.")
 async def shop_cmd(interaction: discord.Interaction):
     if not await verify_server_access(interaction):
         return
+    db_cursor.execute("SELECT id, item_name, category, price, command FROM shop_items WHERE guild_id = ?", (interaction.guild.id,))
+    items = db_cursor.fetchall()
+    
+    if not items:
+        await interaction.response.send_message("❌ The shop is currently empty. An administrator must create items first using `/shopcreate`.", ephemeral=True)
+        return
+
     embed = discord.Embed(title="🛒 DayZ Console Marketplace", description="Select an item below from the dropdown menu to proceed to checkout.", color=0x7e22ce)
-    await interaction.response.send_message(embed=embed, view=ShopView(), ephemeral=True)
+    await interaction.response.send_message(embed=embed, view=ShopView(items), ephemeral=True)
 
 class ShopWizardModal(discord.ui.Modal, title="Create Console Shop Item"):
     item_name = discord.ui.TextInput(label="Console Item Name", placeholder="e.g. M4A1, SVD, Ada 4x4", required=True)
@@ -289,14 +555,18 @@ class ShopWizardModal(discord.ui.Modal, title="Create Console Shop Item"):
     spawn_code = discord.ui.TextInput(label="Console RCON Spawn Command", placeholder="spawn item_code", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        shop_items_db.append({"item": self.item_name.value, "category": self.category.value, "price": int(self.price.value), "command": self.spawn_code.value})
+        db_cursor.execute(
+            "INSERT INTO shop_items (guild_id, item_name, category, price, command) VALUES (?, ?, ?, ?, ?)",
+            (interaction.guild.id, self.item_name.value, self.category.value, int(self.price.value), self.spawn_code.value)
+        )
+        db_conn.commit()
         await interaction.response.send_message(f"✅ Added **{self.item_name.value}** to shop database!", ephemeral=True)
 
 @bot.tree.command(name="shopcreate", description="Admin Only: Create new items for the console shop.")
 async def shopcreate_cmd(interaction: discord.Interaction):
     if not await verify_server_access(interaction):
         return
-    if not interaction.user.guild_permissions.administrator:
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     await interaction.response.send_modal(ShopWizardModal())
@@ -305,16 +575,15 @@ async def shopcreate_cmd(interaction: discord.Interaction):
 async def shopremove_cmd(interaction: discord.Interaction, item_name: str):
     if not await verify_server_access(interaction):
         return
-    if not interaction.user.guild_permissions.administrator:
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     
-    global shop_items_db
-    initial_len = len(shop_items_db)
-    shop_items_db = [i for i in shop_items_db if i["item"].lower() != item_name.lower()]
+    db_cursor.execute("DELETE FROM shop_items WHERE guild_id = ? AND item_name LIKE ?", (interaction.guild.id, f"%{item_name}%"))
+    db_conn.commit()
     
-    if len(shop_items_db) < initial_len:
-        await interaction.response.send_message(f"🗑️ Successfully removed **{item_name}** from the shop database.", ephemeral=True)
+    if db_cursor.rowcount > 0:
+        await interaction.response.send_message(f"🗑️ Successfully removed matching items (**{item_name}**) from the shop database.", ephemeral=True)
     else:
         await interaction.response.send_message(f"❌ Item **{item_name}** was not found in the shop.", ephemeral=True)
 
@@ -344,13 +613,13 @@ async def zone_cmd(interaction: discord.Interaction, action: str):
     if not await verify_server_access(interaction):
         return
     if action.lower() == "create":
-        if not interaction.user.guild_permissions.administrator:
+        if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
         embed = discord.Embed(title="📍 Step-by-Step Zone Creator", description="Select the zone type below to launch the visual console map drawer.", color=0x7e22ce)
         await interaction.response.send_message(embed=embed, view=MapView(), ephemeral=True)
     elif action.lower() == "remove":
-        if not interaction.user.guild_permissions.administrator:
+        if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
         await interaction.response.send_message("🗑️ Zone removed successfully from map grid database.", ephemeral=True)
@@ -390,18 +659,22 @@ async def casino_cmd(interaction: discord.Interaction):
 async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
     if not await verify_server_access(interaction):
         return
-    bounties_db[member.id] = {"amount": reward, "setter": interaction.user.id}
+    db_cursor.execute("INSERT OR REPLACE INTO bounties (target_id, amount, setter_id) VALUES (?, ?, ?)", (member.id, reward, interaction.user.id))
+    db_conn.commit()
     await interaction.response.send_message(f"🎯 Bounty of **${reward}** placed on {member.mention}! High-speed live location radar tracking activated in Discord.", ephemeral=False)
 
 @bot.tree.command(name="bountyclaim", description="Claim a bounty using kill-feed verification.")
 async def bountyclaim_cmd(interaction: discord.Interaction, target: discord.Member):
     if not await verify_server_access(interaction):
         return
-    if target.id not in bounties_db:
+    db_cursor.execute("SELECT amount FROM bounties WHERE target_id = ?", (target.id,))
+    row = db_cursor.fetchone()
+    if not row:
         await interaction.response.send_message("❌ No active bounty found for this player.", ephemeral=True)
         return
-    reward = bounties_db[target.id]["amount"]
-    del bounties_db[target.id]
+    reward = row[0]
+    db_cursor.execute("DELETE FROM bounties WHERE target_id = ?", (target.id,))
+    db_conn.commit()
     await interaction.response.send_message(f"🏆 Kill-feed verified! {interaction.user.mention} successfully claimed the **${reward}** bounty.", ephemeral=False)
 
 
@@ -410,11 +683,12 @@ async def bountyclaim_cmd(interaction: discord.Interaction, target: discord.Memb
 async def killfeed_cmd(interaction: discord.Interaction, status: str):
     if not await verify_server_access(interaction):
         return
-    if not interaction.user.guild_permissions.administrator:
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
-    enabled = status.lower() == "enable"
-    killfeed_config_db[interaction.guild.id] = enabled
+    enabled = 1 if status.lower() == "enable" else 0
+    db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled) VALUES (?, ?)", (interaction.guild.id, enabled))
+    db_conn.commit()
     await interaction.response.send_message(f"✅ Automated kill feed status set to: **{'ENABLED' if enabled else 'DISABLED'}** (Tracks killer, victim, weapon, body part hit, distance).", ephemeral=True)
 
 @bot.tree.command(name="leaderboard", description="Create a detailed player competitive leaderboard.")
@@ -431,7 +705,7 @@ async def leaderboard_create_cmd(interaction: discord.Interaction):
 async def location_cmd(interaction: discord.Interaction, member: discord.Member = None):
     if not await verify_server_access(interaction):
         return
-    if member and not interaction.user.guild_permissions.administrator:
+    if member and not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required to track other players.", ephemeral=True)
         return
     target = member or interaction.user
