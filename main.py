@@ -1,5 +1,4 @@
 import os
-import threading
 import asyncio
 import socket
 import struct
@@ -14,11 +13,7 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
 
 MASTER_ADMIN_ID = 578271264779665438
 
-# In-memory storage for subscriptions, tickets, and configurations
-active_subscriptions_db = {
-    # guild_id: {"customer_name": str, "joined_at": "YYYY-MM-DD", "tickets_total": int, "tickets_open": int, "tickets_closed": int}
-}
-
+active_subscriptions_db = {}
 server_config_db = {"ip": "", "port": 27015, "password": ""}
 welcome_config_db = {"channel": "general", "message": "Welcome to the server, {user}!"}
 goodbye_config_db = {"channel": "general", "message": "Goodbye, {user}! Thanks for stopping by."}
@@ -96,8 +91,6 @@ async def on_guild_join(guild):
     if guild.id == MASTER_ADMIN_ID:
         return
     
-    # Check if guild has active sub or if master admin owns it
-    # For public servers, check payment / enforce paywall
     payment_link = STRIPE_PAYMENT_LINK
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
@@ -132,8 +125,6 @@ async def active_cmd(interaction: discord.Interaction):
     active_servers_count = len(bot.guilds)
     embed = discord.Embed(title="👑 Master Admin Dashboard - /active", color=0x7e22ce)
     embed.add_field(name="Active Bot Servers", value=str(active_servers_count), inline=False)
-    
-    # Mocking customer metrics for dashboard demonstration
     embed.add_field(
         name="Customer Subscriptions & Tickets",
         value="• **Server Alpha** | Subbed: 45 Days | Tickets: 3 (2 Open / 1 Closed)\n• **Server Bravo** | Subbed: 12 Days | Tickets: 1 (0 Open / 1 Closed)",
@@ -147,7 +138,7 @@ class PlayerChannelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Setup Player List Channel", style=discord.ButtonStyle.purple, custom_id="setup_player_list")
+    @discord.ui.button(label="Setup Player List Channel", style=discord.ButtonStyle.blurple, custom_id="setup_player_list")
     async def setup_player_list(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
