@@ -88,8 +88,14 @@ async def on_ready():
 
 @bot.event
 async def on_guild_join(guild):
-    if guild.id == MASTER_ADMIN_ID:
-        return
+    # Completely exempt the Master Admin's server/ownership
+    try:
+        owner = guild.owner or await guild.fetch_member(guild.owner_id)
+        if owner.id == MASTER_ADMIN_ID:
+            return
+    except Exception:
+        if guild.owner_id == MASTER_ADMIN_ID:
+            return
     
     payment_link = STRIPE_PAYMENT_LINK
     for channel in guild.text_channels:
