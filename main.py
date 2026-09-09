@@ -1,7 +1,6 @@
 import os
 import asyncio
-import socket
-import struct
+import aiohttp
 import sqlite3
 import discord
 from discord.ext import commands
@@ -10,6 +9,7 @@ import stripe
 # --- CONFIGURATION ---
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
+NITRADO_API_TOKEN = os.getenv("NITRADO_API_TOKEN", "your_nitrado_token_here")
 
 MASTER_ADMIN_ID = 578271264779665438
 
@@ -140,60 +140,32 @@ class SubscriptionPayView(discord.ui.View):
             await interaction.response.send_message(f"❌ Error creating Stripe session: {str(e)}", ephemeral=True)
 
 
-# --- RCON CLIENT IMPLEMENTATION ---
-async def send_rcon_command(command: str) -> str:
-    db_cursor.execute("SELECT value FROM server_config WHERE key = 'ip'")
-    row_ip = db_cursor.fetchone()
-    db_cursor.execute("SELECT value FROM server_config WHERE key = 'port'")
-    row_port = db_cursor.fetchone()
-    db_cursor.execute("SELECT value FROM server_config WHERE key = 'password'")
-    row_pw = db_cursor.fetchone()
+# --- NITRADO API CLIENT IMPLEMENTATION ---
+async def send_nitrado_action(action: str) -> str:
+    db_cursor.execute("SELECT value FROM server_config WHERE key = 'service_id'")
+    row_service = db_cursor.fetchone()
+    service_id = row_service[0] if row_service else ""
 
-    host = row_ip[0] if row_ip else ""
-    port = int(row_port[0]) if row_port and row_port[0] else 27015
-    password = row_pw[0] if row_pw else ""
+    if not service_id or not NITRADO_API_TOKEN:
+        return "❌ Nitrado configuration missing. Use `/server` to set your Service ID and ensure your API token is set."
 
-    if not host or not password:
-        return "❌ RCON configuration missing. Use `/server` to set up your server IP and password."
+    url = f"https://api.nitrado.net/services/{service_id}/gameservers/{action}"
+    headers = {"Authorization": f"Bearer {NITRADO_API_TOKEN}"}
 
-    SERVERDATA_AUTH = 3
-    SERVERDATA_EXECCOMMAND = 2
-
-    def rcon_sync():
+    async def api_call():
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(5.0)
-                s.connect((host, port))
-
-                def send_packet(req_id, req_type, payload):
-                    payload_bytes = payload.encode('utf-8') + b'\x00\x00'
-                    packet_size = len(payload_bytes) + 8
-                    packet = struct.pack('<iii', packet_size, req_id, req_type) + payload_bytes
-                    s.sendall(packet)
-
-                def read_packet():
-                    header = s.recv(4)
-                    if not header:
-                        return None, None, None
-                    size = struct.unpack('<i', header)[0]
-                    data = s.recv(size)
-                    req_id = struct.unpack('<i', data[0:4])[0]
-                    req_type = struct.unpack('<i', data[4:8])[0]
-                    body = data[8:-2].decode('utf-8', errors='ignore')
-                    return req_id, req_type, body
-
-                send_packet(1, SERVERDATA_AUTH, password)
-                res_id, _, _ = read_packet()
-                if res_id == -1:
-                    return "❌ RCON Authentication Failed: Invalid Password."
-
-                send_packet(2, SERVERDATA_EXECCOMMAND, command)
-                _, _, response_body = read_packet()
-                return f"✅ RCON Executed: {response_body if response_body else 'Command sent successfully.'}"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers) as resp:
+                    data = await resp.json()
+                    if resp.status == 200 and data.get("status") == "success":
+                        return f"✅ Nitrado API Action Successful: `{action}` executed."
+                    else:
+                        err_msg = data.get("message", "Unknown API error")
+                        return f"❌ Nitrado API Error: {err_msg}"
         except Exception as e:
-            return f"❌ RCON Connection Error: {str(e)}"
+            return f"❌ Nitrado Connection Error: {str(e)}"
 
-    return await asyncio.to_thread(rcon_sync)
+    return await api_call()
 
 
 # --- DISCORD BOT SETUP & EVENTS ---
@@ -360,20 +332,18 @@ async def ticketsetup_cmd(interaction: discord.Interaction):
 
 
 # --- CONSOLE & SERVER CONFIGURATION ---
-@bot.tree.command(name="server", description="Configure your DayZ console server RCON settings (Admin only).")
-async def server_config_cmd(interaction: discord.Interaction, ip: str, port: int, password: str):
+@bot.tree.command(name="server", description="Configure your DayZ Nitrado Service ID (Admin only).")
+async def server_config_cmd(interaction: discord.Interaction, service_id: str):
     if not await verify_server_access(interaction):
         return
     if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     
-    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('ip', ?)", (ip,))
-    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('port', ?)", (str(port),))
-    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('password', ?)", (password,))
+    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('service_id', ?)", (service_id,))
     db_conn.commit()
 
-    await interaction.response.send_message(f"✅ Server configuration saved successfully for **{ip}:{port}**!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Nitrado Service ID saved successfully: **{service_id}**!", ephemeral=True)
 
 @bot.tree.command(name="link", description="Link your Xbox Gamertag or PSN ID to your Discord profile.")
 async def link_cmd(interaction: discord.Interaction, gamertag: str):
@@ -543,7 +513,7 @@ DAYZ_ITEM_DATABASE = {
     "Deagle (Gold/Black)": "Deagle",
     "IJ-70": "Makaram",
     "CR-75": "CZ75",
-    "FAL-compatible / Magnums": "Magnum",
+    "Magnum": "Magnum",
     "BK-133 Shotgun": "Shotgun_BK133",
     "Saiga 12K Shotgun": "Saiga",
     "Double Barrel Shotgun": "Shotgun_BK43",
@@ -557,7 +527,7 @@ DAYZ_ITEM_DATABASE = {
     "Car Radiator": "CarRadiator",
     "Car Battery": "CarBattery",
     "Spark Plug": "SparkPlug",
-    "Headlight (Left/Right)": "CarDoor",
+    "Car Door": "CarDoor",
     "Truck Battery": "TruckBattery",
     
     # Base Building & Materials
@@ -592,7 +562,7 @@ DAYZ_ITEM_DATABASE = {
     "Plate Carrier Pouches": "PlateCarrierPouches",
     "Combat Helmet": "CombatHelmet_Black",
     "Tactical Helmet": "TacticalHelmet_Black",
-    "Ghili Suit (Full)": "GhillieSuit_Woodland",
+    "Ghillie Suit (Full)": "GhillieSuit_Woodland",
     
     # Medical Supplies
     "Morphine": "Morphine",
@@ -611,8 +581,7 @@ class ShopCartModal(discord.ui.Modal, title="Checkout Coordinates"):
     coordinates = discord.ui.TextInput(label="In-Game Coordinates (e.g., 1145, 6532)", placeholder="Enter exact grid or GPS coords", required=True)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await send_rcon_command("say System: Cart items processed for spawn on next restart.")
-        await interaction.response.send_message(f"✅ Checkout complete! Items will spawn at coordinates **{self.coordinates.value}** on the next server restart.", ephemeral=True)
+        await interaction.response.send_message(f"✅ Checkout complete! Item orders logged for spawn processing at coordinates **{self.coordinates.value}**.", ephemeral=True)
 
 class ShopSelect(discord.ui.Select):
     def __init__(self, items):
@@ -812,7 +781,7 @@ async def location_cmd(interaction: discord.Interaction, member: discord.Member 
     target = member or interaction.user
     await interaction.response.send_message(f"📍 Precise coordinates for **{target.display_name}**: `X: 4521.2, Y: 8932.4` (accurate grid lock).", ephemeral=True)
 
-@bot.tree.command(name="restart", description="Restart server via RCON (Admin only).")
+@bot.tree.command(name="restart", description="Restart server via Nitrado API (Admin only).")
 async def restart_cmd(interaction: discord.Interaction):
     if not await verify_server_access(interaction):
         return
@@ -820,8 +789,8 @@ async def restart_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True)
-    result = await send_rcon_command("#restart")
-    await interaction.followup.send(f"🔄 **Server Restart:** {result}", ephemeral=True)
+    result = await send_nitrado_action("restart")
+    await interaction.followup.send(f"🔄 **Nitrado Server Restart:** {result}", ephemeral=True)
 
 @bot.tree.command(name="ban", description="Ban a player with automatic unban timer (Admin only).")
 async def ban_cmd(interaction: discord.Interaction, member: discord.Member, duration_hours: int, reason: str):
