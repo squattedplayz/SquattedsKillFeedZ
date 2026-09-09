@@ -22,6 +22,29 @@ shop_items_db = []
 active_player_channel_db = {}
 
 
+# --- ACCESS & SUBSCRIPTION CHECK ---
+async def verify_server_access(interaction: discord.Interaction) -> bool:
+    """Returns True if the user or server owner is the Master Admin, or if active subscription exists."""
+    if interaction.user.id == MASTER_ADMIN_ID:
+        return True
+    try:
+        owner = interaction.guild.owner or await interaction.guild.fetch_member(interaction.guild.owner_id)
+        if owner.id == MASTER_ADMIN_ID:
+            return True
+    except Exception:
+        if interaction.guild.owner_id == MASTER_ADMIN_ID:
+            return True
+            
+    if interaction.guild.id in active_subscriptions_db:
+        return True
+        
+    await interaction.response.send_message(
+        f"🔒 **Access Restricted:** This server requires an active subscription of **$12.99/month** to use bot commands.\n\n[Click Here to Subscribe via Stripe]({STRIPE_PAYMENT_LINK})",
+        ephemeral=True
+    )
+    return False
+
+
 # --- RCON CLIENT IMPLEMENTATION ---
 async def send_rcon_command(command: str) -> str:
     host = server_config_db.get("ip")
@@ -71,7 +94,7 @@ async def send_rcon_command(command: str) -> str:
     return await asyncio.to_thread(rcon_sync)
 
 
-# --- DISCORD BOT SETUP & COMMANDS ---
+# --- DISCORD BOT SETUP & EVENTS ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
@@ -88,7 +111,6 @@ async def on_ready():
 
 @bot.event
 async def on_guild_join(guild):
-    # Completely exempt the Master Admin's server/ownership
     try:
         owner = guild.owner or await guild.fetch_member(guild.owner_id)
         if owner.id == MASTER_ADMIN_ID:
@@ -97,12 +119,11 @@ async def on_guild_join(guild):
         if guild.owner_id == MASTER_ADMIN_ID:
             return
     
-    payment_link = STRIPE_PAYMENT_LINK
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
             embed = discord.Embed(
                 title="🔒 Subscription Required",
-                description=f"Thank you for inviting SquattedSkillFeedZ! This bot requires an active subscription of **$12.99/month** to operate.\n\n[Click Here to Subscribe via Stripe]({payment_link})\n\nOnce subscribed, your server access will unlock automatically.",
+                description=f"Thank you for inviting SquattedSkillFeedZ! This bot requires an active subscription of **$12.99/month** to operate.\n\n[Click Here to Subscribe via Stripe]({STRIPE_PAYMENT_LINK})\n\nOnce subscribed, your server access will unlock automatically.",
                 color=0x7e22ce
             )
             await channel.send(embed=embed)
@@ -146,6 +167,8 @@ class PlayerChannelView(discord.ui.View):
 
     @discord.ui.button(label="Setup Player List Channel", style=discord.ButtonStyle.blurple, custom_id="setup_player_list")
     async def setup_player_list(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await verify_server_access(interaction):
+            return
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
@@ -154,13 +177,15 @@ class PlayerChannelView(discord.ui.View):
 
 @bot.tree.command(name="setplayerlist", description="Configure a channel to display currently online DayZ console players.")
 async def setplayerlist_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     
     embed = discord.Embed(
         title="👥 Live Player List Setup",
-        description="Click the button below to bind this channel as your live online player feed. It will update regularly with in-game tags (no location data shown for safety).",
+        description="Click the button below to bind this channel as your live online player feed.",
         color=0x7e22ce
     )
     await interaction.response.send_message(embed=embed, view=PlayerChannelView(), ephemeral=False)
@@ -188,6 +213,8 @@ class ShopManagementView(discord.ui.View):
 
     @discord.ui.button(label="➕ Create Shop Item", style=discord.ButtonStyle.green, custom_id="shop_create")
     async def shop_create(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await verify_server_access(interaction):
+            return
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
@@ -195,6 +222,8 @@ class ShopManagementView(discord.ui.View):
 
     @discord.ui.button(label="➖ Remove Shop Item", style=discord.ButtonStyle.red, custom_id="shop_remove")
     async def shop_remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await verify_server_access(interaction):
+            return
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
@@ -207,6 +236,9 @@ class ShopManagementView(discord.ui.View):
 
 @bot.tree.command(name="shop", description="Open the interactive console shop management menu.")
 async def shop_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
+    
     embed = discord.Embed(
         title="🛒 Console Shop Management Wizard",
         description="Use the buttons below to create or remove items for your Xbox/PlayStation DayZ server shop.",
@@ -238,16 +270,20 @@ class WelcomeSetupView(discord.ui.View):
 
 @bot.tree.command(name="welcome", description="Configure or remove automated server welcome messages.")
 async def welcome_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
     if not interaction.user.guild_permissions.administrator:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
-    embed = discord.Embed(title="👋 Welcome Message Manager", description="Choose an option below to set up or remove welcome greetings for new members.", color=0x7e22ce)
+    embed = discord.Embed(title="👋 Welcome Message Manager", description="Choose an option below to set up or remove welcome greetings.", color=0x7e22ce)
     await interaction.response.send_message(embed=embed, view=WelcomeSetupView(), ephemeral=False)
 
 
-# --- OTHER UTILITY COMMANDS ---
+# --- UTILITY COMMANDS ---
 @bot.tree.command(name="restart", description="Restarts server via RCON (Admin Only)")
 async def restart_cmd(interaction: discord.Interaction):
+    if not await verify_server_access(interaction):
+        return
     if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ You lack administrator permissions.", ephemeral=True)
         return
@@ -257,10 +293,14 @@ async def restart_cmd(interaction: discord.Interaction):
 
 @bot.tree.command(name="bounty", description="Place a bounty on a player and create target tracking zone")
 async def bounty_cmd(interaction: discord.Interaction, member: discord.Member, reward: int):
+    if not await verify_server_access(interaction):
+        return
     await interaction.response.send_message(f"🎯 Bounty of ${reward} placed on {member.mention}! Target radar zone generated automatically.", ephemeral=False)
 
 @bot.tree.command(name="ban", description="Ban a player with automatic unban timer")
 async def ban_cmd(interaction: discord.Interaction, member: discord.Member, duration_hours: int, reason: str):
+    if not await verify_server_access(interaction):
+        return
     if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Admin only.", ephemeral=True)
         return
