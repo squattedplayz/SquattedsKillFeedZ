@@ -13,7 +13,7 @@ NITRADO_API_TOKEN = os.getenv("NITRADO_API_TOKEN", "your_nitrado_token_here")
 
 MASTER_ADMIN_ID = 578271264779665438
 
-# --- SQLITE DATABASE SETUP (100% Persistent) ---
+# --- SQLITE DATABASE SETUP (100% Persistent & Multi-Tenant) ---
 db_conn = sqlite3.connect("dayz_bot.db", check_same_thread=False)
 db_cursor = db_conn.cursor()
 
@@ -23,8 +23,10 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 
 CREATE TABLE IF NOT EXISTS server_config (
-    key TEXT PRIMARY KEY,
-    value TEXT
+    guild_id INTEGER,
+    key TEXT,
+    value TEXT,
+    PRIMARY KEY (guild_id, key)
 );
 
 CREATE TABLE IF NOT EXISTS welcome_config (
@@ -141,8 +143,8 @@ class SubscriptionPayView(discord.ui.View):
 
 
 # --- NITRADO API CLIENT IMPLEMENTATION ---
-async def send_nitrado_action(action: str) -> str:
-    db_cursor.execute("SELECT value FROM server_config WHERE key = 'service_id'")
+async def send_nitrado_action(guild_id: int, action: str) -> str:
+    db_cursor.execute("SELECT value FROM server_config WHERE guild_id = ? AND key = 'service_id'", (guild_id,))
     row_service = db_cursor.fetchone()
     service_id = row_service[0] if row_service else ""
 
@@ -340,10 +342,13 @@ async def server_config_cmd(interaction: discord.Interaction, service_id: str):
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     
-    db_cursor.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('service_id', ?)", (service_id,))
+    db_cursor.execute(
+        "INSERT OR REPLACE INTO server_config (guild_id, key, value) VALUES (?, 'service_id', ?)", 
+        (interaction.guild.id, service_id)
+    )
     db_conn.commit()
 
-    await interaction.response.send_message(f"✅ Nitrado Service ID saved successfully: **{service_id}**!", ephemeral=True)
+    await interaction.response.send_message(f"✅ Nitrado Service ID saved successfully for this server: **{service_id}**!", ephemeral=True)
 
 @bot.tree.command(name="link", description="Link your Xbox Gamertag or PSN ID to your Discord profile.")
 async def link_cmd(interaction: discord.Interaction, gamertag: str):
@@ -789,7 +794,7 @@ async def restart_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
     await interaction.response.defer(thinking=True)
-    result = await send_nitrado_action("restart")
+    result = await send_nitrado_action(interaction.guild.id, "restart")
     await interaction.followup.send(f"🔄 **Nitrado Server Restart:** {result}", ephemeral=True)
 
 @bot.tree.command(name="ban", description="Ban a player with automatic unban timer (Admin only).")
