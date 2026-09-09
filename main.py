@@ -154,7 +154,7 @@ async def send_rcon_command(command: str) -> str:
     password = row_pw[0] if row_pw else ""
 
     if not host or not password:
-        return "❌ RCON configuration missing. Use `/server config` to set up your server."
+        return "❌ RCON configuration missing. Use `/server` to set up your server IP and password."
 
     SERVERDATA_AUTH = 3
     SERVERDATA_EXECCOMMAND = 2
@@ -513,6 +513,99 @@ async def rob_cmd(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message(f"🥷 You successfully robbed **${stolen}** from {member.mention}!", ephemeral=True)
 
 
+# --- NATIVE DAYZ CONSOLE ITEM DATABASE (Expanded & Comprehensive) ---
+DAYZ_ITEM_DATABASE = {
+    # Assault Rifles, SMGs & Rifles
+    "M4A1": "M4A1",
+    "KA-M (AKM)": "AKM",
+    "KA-74 (AK74)": "AK74",
+    "KA-101": "AK101",
+    "LAR (FN FAL)": "FAL",
+    "VAL": "VSS",
+    "VSS Vintorez": "VSS",
+    "UMP-45": "UMP45",
+    "MP5-K": "MP5",
+    "FX-45": "Pistol_FX45",
+    "SVD": "SVD",
+    "Blaze": "Blaze",
+    "M70 Tundra": "Winchester70",
+    "Mosina 91/30": "Mosin9130",
+    "SKS": "SKS",
+    "CR-527": "CZ527",
+    "Repeater": "Winchester73",
+    "Scout": "Scout",
+    "SG5-K": "MP5",
+    "KAS-74U": "AKS74U",
+    
+    # Pistols & Shotguns
+    "M1911": "M1911",
+    "Glock 19": "Pistol_Glock19",
+    "Deagle (Gold/Black)": "Deagle",
+    "IJ-70": "Makaram",
+    "CR-75": "CZ75",
+    "FAL-compatible / Magnums": "Magnum",
+    "BK-133 Shotgun": "Shotgun_BK133",
+    "Saiga 12K Shotgun": "Saiga",
+    "Double Barrel Shotgun": "Shotgun_BK43",
+    
+    # Vehicles & Vehicle Parts
+    "Ada 4x4 Car": "OffroadHatchback",
+    "Olga 24 Sedan": "CivilianSedan",
+    "Sarka 120": "Hatchback_02",
+    "Gunter 2": "Sedan_02",
+    "Truck (M3S)": "Truck_01",
+    "Car Radiator": "CarRadiator",
+    "Car Battery": "CarBattery",
+    "Spark Plug": "SparkPlug",
+    "Headlight (Left/Right)": "CarDoor",
+    "Truck Battery": "TruckBattery",
+    
+    # Base Building & Materials
+    "Wooden Log": "WoodenLog",
+    "Wooden Plank": "WoodenPlank",
+    "Nails (Box of 50)": "Nails",
+    "Metal Wire": "MetalWire",
+    "Code Lock": "CodeLock",
+    "Combination Lock": "CombLock",
+    "Barbed Wire": "BarbedWire",
+    "Camo Net": "CamoNet",
+    "Tent (Medium)": "TentMedium",
+    "Car Tent": "CarTent",
+    "Large Tent": "LargeTent",
+    "Party Tent": "PartyTent",
+    "Sea Chest": "SeaChest",
+    "Wooden Crate": "WoodenCrate",
+    "Pliers": "Pliers",
+    "Hacksaw": "Hacksaw",
+    "Hatchet": "Hatchet",
+    "Hammer": "Hammer",
+    "Shovel": "Shovel",
+    "Pickaxe": "Pickaxe",
+    
+    # Gear & Containers
+    "Military Belt": "MilitaryBelt",
+    "Tactical Backpack": "TortillaBag",
+    "Field Backpack": "FieldBag",
+    "Assault Backpack": "AssaultBag",
+    "Hunting Backpack": "HuntingBag",
+    "Plate Carrier": "PlateCarrierVest",
+    "Plate Carrier Pouches": "PlateCarrierPouches",
+    "Combat Helmet": "CombatHelmet_Black",
+    "Tactical Helmet": "TacticalHelmet_Black",
+    "Ghili Suit (Full)": "GhillieSuit_Woodland",
+    
+    # Medical Supplies
+    "Morphine": "Morphine",
+    "Epinephrine": "Epinephrine",
+    "Saline Bag (IV)": "SalineBagIV",
+    "Blood Bag (IV)": "BloodBagIV",
+    "First Aid Kit": "FirstAidKit",
+    "Bandage": "BandageDressing",
+    "Tetracycline Pills": "Antibiotics",
+    "Painkiller Tablets": "Painkillers",
+    "Purification Tablets": "WaterPurificationTablets"
+}
+
 # --- SHOP & CART SYSTEM ---
 class ShopCartModal(discord.ui.Modal, title="Checkout Coordinates"):
     coordinates = discord.ui.TextInput(label="In-Game Coordinates (e.g., 1145, 6532)", placeholder="Enter exact grid or GPS coords", required=True)
@@ -548,28 +641,36 @@ async def shop_cmd(interaction: discord.Interaction):
     embed = discord.Embed(title="🛒 DayZ Console Marketplace", description="Select an item below from the dropdown menu to proceed to checkout.", color=0x7e22ce)
     await interaction.response.send_message(embed=embed, view=ShopView(items), ephemeral=True)
 
-class ShopWizardModal(discord.ui.Modal, title="Create Console Shop Item"):
-    item_name = discord.ui.TextInput(label="Console Item Name", placeholder="e.g. M4A1, SVD, Ada 4x4", required=True)
-    category = discord.ui.TextInput(label="Category", placeholder="Weapons, Vehicles, Gear", required=True)
-    price = discord.ui.TextInput(label="Price", placeholder="1500", required=True)
-    spawn_code = discord.ui.TextInput(label="Console RCON Spawn Command", placeholder="spawn item_code", required=True)
+async def item_autocomplete(interaction: discord.Interaction, current: str):
+    matches = [
+        discord.app_commands.Choice(name=name, value=code)
+        for name, code in DAYZ_ITEM_DATABASE.items()
+        if current.lower() in name.lower()
+    ]
+    return matches[:25]
 
-    async def on_submit(self, interaction: discord.Interaction):
-        db_cursor.execute(
-            "INSERT INTO shop_items (guild_id, item_name, category, price, command) VALUES (?, ?, ?, ?, ?)",
-            (interaction.guild.id, self.item_name.value, self.category.value, int(self.price.value), self.spawn_code.value)
-        )
-        db_conn.commit()
-        await interaction.response.send_message(f"✅ Added **{self.item_name.value}** to shop database!", ephemeral=True)
-
-@bot.tree.command(name="shopcreate", description="Admin Only: Create new items for the console shop.")
-async def shopcreate_cmd(interaction: discord.Interaction):
+@bot.tree.command(name="shopcreate", description="Admin Only: Add a native DayZ item to the shop using a searchable dropdown list.")
+@discord.app_commands.describe(
+    item="Start typing to search native DayZ items...",
+    price="Cost in in-game currency",
+    category="Category (e.g., Weapons, Vehicles, Building)"
+)
+@discord.app_commands.autocomplete(item=item_autocomplete)
+async def shopcreate_cmd(interaction: discord.Interaction, item: str, price: int, category: str):
     if not await verify_server_access(interaction):
         return
     if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
         await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
         return
-    await interaction.response.send_modal(ShopWizardModal())
+
+    display_name = next((k for k, v in DAYZ_ITEM_DATABASE.items() if v == item), item)
+
+    db_cursor.execute(
+        "INSERT INTO shop_items (guild_id, item_name, category, price, command) VALUES (?, ?, ?, ?, ?)",
+        (interaction.guild.id, display_name, category, price, f"spawn {item}")
+    )
+    db_conn.commit()
+    await interaction.response.send_message(f"✅ Successfully added **{display_name}** to the shop marketplace for **${price}** (`{category}`)!", ephemeral=True)
 
 @bot.tree.command(name="shopremove", description="Admin Only: Remove an item from the console shop database.")
 async def shopremove_cmd(interaction: discord.Interaction, item_name: str):
