@@ -371,72 +371,44 @@ async def api_save_zone(request):
     db_conn.commit()
     return web.json_response({"status": "success"})
 
-class MapSelectView(discord.ui.View):
-    def __init__(self, zone_type: str):
+
+# --- BULLETPROOF BUTTON VIEW FOR WEB MAP ---
+class MapLinkView(discord.ui.View):
+    def __init__(self, web_url: str):
         super().__init__(timeout=180)
-        self.zone_type = zone_type
-
-    @discord.ui.select(placeholder="Select DayZ Map...", options=[
-        discord.SelectOption(label="Chernarus", description="Standard 15x15km wooded & military map", emoji="🌲"),
-        discord.SelectOption(label="Livonia", description="Lush forested and riverine DLC map", emoji="🌊"),
-        discord.SelectOption(label="Sakhal", description="Severe arctic volcanic archipelago map", emoji="❄️")
-    ])
-    async def select_map(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.defer()
-        selected_map = select.values[0]
-        map_image_url = MAP_IMAGE_URLS.get(selected_map, MAP_IMAGE_URLS["Chernarus"])
-        web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={selected_map}&type={self.zone_type}"
-        
-        embed = discord.Embed(
-            title=f"🗺️ Precision Map Canvas — {selected_map} ({self.zone_type})",
-            description=f"Click the secure button below to launch your **Interactive Zoomable Map Drawer** in your browser.\n\n• **Zoom in/out** with your mouse wheel or pinch gesture for pinpoint accuracy.\n• **Click & drag / tap** to draw custom zone boundaries.\n• Click **Save Drawn Zone** to sync instantly back to your Discord server.",
-            color=0x7e22ce
-        )
-        embed.set_image(url=map_image_url)
-        
-        view = discord.ui.View()
-        view.add_item(discord.ui.Button(label="🌐 Open Zoomable Web Canvas", style=discord.ButtonStyle.link, url=web_url))
-        
-        await interaction.edit_original_response(embed=embed, view=view)
-
-class ZoneTypeSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=180)
-
-    @discord.ui.select(placeholder="Select Zone Type to Draw...", options=[
-        discord.SelectOption(label="Base Radar", description="High-speed precision radar tracking base activity"),
-        discord.SelectOption(label="PvP Zone", description="Designated player combat zone"),
-        discord.SelectOption(label="Safe Zone", description="Protected non-combat zone"),
-        discord.SelectOption(label="Player Radar", description="Instant-refresh target tracking radar"),
-        discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone")
-    ])
-    async def select_zone_type(self, interaction: discord.Interaction, select: discord.ui.Select):
-        await interaction.response.defer()
-        zone_type = select.values[0]
-        embed = discord.Embed(
-            title=f"🗺️ Select Map for {zone_type}",
-            description="Choose which DayZ map you want to open in the interactive zoomable drawing canvas.",
-            color=0x7e22ce
-        )
-        await interaction.edit_original_response(embed=embed, view=MapSelectView(zone_type))
+        self.add_item(discord.ui.Button(label="🌐 Open Zoomable Web Canvas", style=discord.ButtonStyle.link, url=web_url))
 
 
 # --- ALL COMPREHENSIVE DISCORD SLASH COMMANDS ---
 @bot.tree.command(name="zone", description="Launch the interactive zoomable web map drawer for zones/radars (Admin only).")
-async def zone_cmd(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
+async def zone_cmd(
+    interaction: discord.Interaction, 
+    action: str, 
+    map_name: str = "Chernarus", 
+    zone_type: str = "Base Radar", 
+    channel: discord.TextChannel = None
+):
     await interaction.response.defer(ephemeral=True)
     if not await verify_server_access(interaction):
         return
+        
     if action.lower() == "create":
+        if channel:
+            db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, channel_id) VALUES (?, ?, ?)", (interaction.guild.id, zone_type, channel.id))
+            db_conn.commit()
+            
+        map_image_url = MAP_IMAGE_URLS.get(map_name, MAP_IMAGE_URLS["Chernarus"])
+        web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={map_name}&type={zone_type}"
+        
         embed = discord.Embed(
-            title="📍 Interactive Zoomable Map Drawer",
-            description="Select the **Zone Type** below from the dropdown menu to begin.",
+            title=f"🗺️ Precision Map Canvas — {map_name} ({zone_type})",
+            description=f"Click the secure button below to launch your **Interactive Zoomable Map Drawer** in your browser.\n\n• **Zoom in/out** with your mouse wheel or pinch gesture.\n• **Click & drag / tap** to draw custom zone boundaries.\n• Click **Save Drawn Zone** to sync instantly back to your Discord server.",
             color=0x7e22ce
         )
-        if channel:
-            db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, channel_id) VALUES (?, 'General', ?)", (interaction.guild.id, channel.id))
-            db_conn.commit()
-        await interaction.followup.send(embed=embed, view=ZoneTypeSelectView(), ephemeral=True)
+        embed.set_image(url=map_image_url)
+        
+        await interaction.followup.send(embed=embed, view=MapLinkView(web_url), ephemeral=True)
+        
     elif action.lower() == "remove":
         db_cursor.execute("DELETE FROM zones WHERE guild_id = ?", (interaction.guild.id,))
         db_conn.commit()
