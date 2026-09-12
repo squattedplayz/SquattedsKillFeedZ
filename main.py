@@ -507,6 +507,30 @@ async def leaderboardsetup_cmd(interaction: discord.Interaction, channel: discor
     await interaction.followup.send(f"✅ Leaderboard channel successfully bound to {channel.mention}!", ephemeral=True)
 
 
+# --- KILLFEED SETUP COMMANDS ---
+@bot.tree.command(name="killfeed", description="Admin Only: Enable or disable the automated kill feed.")
+@discord.app_commands.choices(action=[
+    discord.app_commands.Choice(name="enable", value="enable"),
+    discord.app_commands.Choice(name="disable", value="disable")
+])
+async def killfeed_cmd(interaction: discord.Interaction, action: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    if not interaction.user.guild_permissions.administrator and interaction.user.id != MASTER_ADMIN_ID:
+        await interaction.followup.send("❌ Administrator permission required.", ephemeral=True)
+        return
+    
+    if action == "enable":
+        db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled) VALUES (?, 1)", (interaction.guild.id,))
+        db_conn.commit()
+        await interaction.followup.send("✅ Kill feed has been **enabled** for this server.", ephemeral=True)
+    elif action == "disable":
+        db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled) VALUES (?, 0)", (interaction.guild.id,))
+        db_conn.commit()
+        await interaction.followup.send("❌ Kill feed has been **disabled** for this server.", ephemeral=True)
+
+
 # --- ECONOMY & BANKING SYSTEM ---
 def get_balance(user_id: int):
     db_cursor.execute("SELECT cash, bank FROM player_balances WHERE user_id = ?", (user_id,))
