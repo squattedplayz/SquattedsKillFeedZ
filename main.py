@@ -229,6 +229,28 @@ async def on_ready():
     except Exception as e:
         print(e)
 
+@bot.event
+async def on_member_join(member: discord.Member):
+    db_cursor.execute("SELECT channel, message FROM welcome_config WHERE guild_id = ?", (member.guild.id,))
+    res = db_cursor.fetchone()
+    if res:
+        ch_name, msg = res
+        channel = discord.utils.get(member.guild.text_channels, name=ch_name) or member.guild.system_channel
+        if channel:
+            formatted_msg = msg.replace("{user}", member.mention).replace("{server}", member.guild.name)
+            await channel.send(formatted_msg)
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    db_cursor.execute("SELECT channel, message FROM goodbye_config WHERE guild_id = ?", (member.guild.id,))
+    res = db_cursor.fetchone()
+    if res:
+        ch_name, msg = res
+        channel = discord.utils.get(member.guild.text_channels, name=ch_name)
+        if channel:
+            formatted_msg = msg.replace("{user}", member.name).replace("{server}", member.guild.name)
+            await channel.send(formatted_msg)
+
 
 # --- INTERACTIVE ZOOMABLE WEB MAP & ZONE DRAWER ---
 MAP_IMAGE_URLS = {
@@ -360,9 +382,6 @@ class MapSelectView(discord.ui.View):
         discord.SelectOption(label="Sakhal", description="Severe arctic volcanic archipelago map", emoji="❄️")
     ])
     async def select_map(self, interaction: discord.Interaction, select: discord.ui.Select):
-        # 1. Immediately defer to prevent Discord interaction timeout (Fixes "didn't respond in time")
-        await interaction.response.defer(ephemeral=True)
-        
         selected_map = select.values[0]
         map_image_url = MAP_IMAGE_URLS.get(selected_map, MAP_IMAGE_URLS["Chernarus"])
         web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={selected_map}&type={self.zone_type}"
@@ -377,7 +396,7 @@ class MapSelectView(discord.ui.View):
         view = discord.ui.View()
         view.add_item(discord.ui.Button(label="🌐 Open Zoomable Web Canvas", style=discord.ButtonStyle.link, url=web_url))
         
-        await interaction.edit_original_response(embed=embed, view=view)
+        await interaction.response.edit_message(embed=embed, view=view)
 
 class ZoneTypeSelectView(discord.ui.View):
     def __init__(self):
@@ -391,20 +410,21 @@ class ZoneTypeSelectView(discord.ui.View):
         discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone")
     ])
     async def select_zone_type(self, interaction: discord.Interaction, select: discord.ui.Select):
-        # 1. Immediately defer to prevent timeout
-        await interaction.response.defer(ephemeral=True)
-        
         zone_type = select.values[0]
         embed = discord.Embed(
             title=f"🗺️ Select Map for {zone_type}",
             description="Choose which DayZ map you want to open in the interactive zoomable drawing canvas.",
             color=0x7e22ce
         )
-        await interaction.edit_original_response(embed=embed, view=MapSelectView(zone_type))
+        await interaction.response.edit_message(embed=embed, view=MapSelectView(zone_type))
 
+
+# --- ALL COMPREHENSIVE DISCORD SLASH COMMANDS ---
 @bot.tree.command(name="zone", description="Launch the interactive zoomable web map drawer for zones/radars (Admin only).")
 async def zone_cmd(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
     if action.lower() == "create":
         embed = discord.Embed(
             title="📍 Interactive Zoomable Map Drawer",
@@ -421,6 +441,173 @@ async def zone_cmd(interaction: discord.Interaction, action: str, channel: disco
         await interaction.followup.send("🗑️ All custom zones and radar configurations have been cleared from this server.", ephemeral=True)
     else:
         await interaction.followup.send("❌ Use `/zone create` or `/zone remove`.", ephemeral=True)
+
+
+@bot.tree.command(name="balance", description="Check your in-game cash and bank balance.")
+async def balance_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("SELECT cash, bank FROM player_balances WHERE user_id = ?", (interaction.user.id,))
+    row = db_cursor.fetchone()
+    if row:
+        cash, bank = row
+    else:
+        cash, bank = 500, 1000
+        db_cursor.execute("INSERT INTO player_balances (user_id, cash, bank) VALUES (?, ?, ?)", (interaction.user.id, cash, bank))
+        db_conn.commit()
+        
+    embed = discord.Embed(title=f"💰 {interaction.user.name}'s Bank Account", color=0x22c55e)
+    embed.add_field(name="Cash", value=f"${cash:,}", inline=True)
+    embed.add_field(name="Bank", value=f"${bank:,}", inline=True)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="shop", description="View items available for purchase in the server store.")
+async def shop_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("SELECT item_name, category, price, command FROM shop_items WHERE guild_id = ?", (interaction.guild.id,))
+    items = db_cursor.fetchall()
+    
+    embed = discord.Embed(title=f"🛒 {interaction.guild.name} — In-Game Store", color=0x3b82f6)
+    if not items:
+        embed.description = "No items have been added to this server's shop yet."
+    else:
+        for name, cat, price, cmd in items:
+            embed.add_field(name=f"{name} (${price:,})", value=f"Category: {cat}\nCommand: `{cmd}`", inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="buy", description="Purchase an item from the server shop.")
+async def buy_cmd(interaction: discord.Interaction, item_id: int):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("SELECT item_name, price, command FROM shop_items WHERE id = ? AND guild_id = ?", (item_id, interaction.guild.id))
+    item = db_cursor.fetchone()
+    if not item:
+        await interaction.followup.send("❌ Item not found in shop.", ephemeral=True)
+        return
+    name, price, cmd = item
+    db_cursor.execute("SELECT cash FROM player_balances WHERE user_id = ?", (interaction.user.id,))
+    b_row = db_cursor.fetchone()
+    cash = b_row[0] if b_row else 0
+    if cash < price:
+        await interaction.followup.send(f"❌ You do not have enough cash! You need ${price:,}, but you have ${cash:,}.", ephemeral=True)
+        return
+    db_cursor.execute("UPDATE player_balances SET cash = cash - ? WHERE user_id = ?", (price, interaction.user.id))
+    db_conn.commit()
+    await interaction.followup.send(f"✅ Successfully purchased **{name}** for ${price:,}! Server execution command: `{cmd}`", ephemeral=True)
+
+
+@bot.tree.command(name="link", description="Link your Discord account to your in-game DayZ gamertag.")
+async def link_cmd(interaction: discord.Interaction, gamertag: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO player_links (discord_id, gamertag) VALUES (?, ?)", (interaction.user.id, gamertag))
+    db_conn.commit()
+    await interaction.followup.send(f"✅ Successfully linked your Discord account to gamertag: **{gamertag}**", ephemeral=True)
+
+
+@bot.tree.command(name="whitelist", description="Manage server access whitelist.")
+async def whitelist_cmd(interaction: discord.Interaction, action: str, gamertag: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    if action.lower() == "add":
+        db_cursor.execute("INSERT INTO whitelist (guild_id, gamertag) VALUES (?, ?)", (interaction.guild.id, gamertag))
+        db_conn.commit()
+        await interaction.followup.send(f"✅ Successfully whitelisted gamertag: **{gamertag}**", ephemeral=True)
+    elif action.lower() == "remove":
+        db_cursor.execute("DELETE FROM whitelist WHERE guild_id = ? AND gamertag = ?", (interaction.guild.id, gamertag))
+        db_conn.commit()
+        await interaction.followup.send(f"🗑️ Removed gamertag from whitelist: **{gamertag}**", ephemeral=True)
+    else:
+        await interaction.followup.send("❌ Use `/whitelist add <gamertag>` or `/whitelist remove <gamertag>`.", ephemeral=True)
+
+
+@bot.tree.command(name="bounty", description="Place or view active bounties on target players.")
+async def bounty_cmd(interaction: discord.Interaction, action: str, amount: int = None, target: discord.Member = None):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    if action.lower() == "list":
+        db_cursor.execute("SELECT target_id, amount, setter_id FROM bounties")
+        bounties = db_cursor.fetchall()
+        embed = discord.Embed(title="🎯 Active Bounties Board", color=0xef4444)
+        if not bounties:
+            embed.description = "No active bounties currently placed."
+        else:
+            for t_id, amt, s_id in bounties:
+                embed.add_field(name=f"Target ID: {t_id}", value=f"Reward: **${amt:,}**\nPlaced by: <@{s_id}>", inline=False)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    elif action.lower() == "set" and target and amount:
+        db_cursor.execute("INSERT OR REPLACE INTO bounties (target_id, amount, setter_id) VALUES (?, ?, ?)", (target.id, amount, interaction.user.id))
+        db_conn.commit()
+        await interaction.followup.send(f"🎯 Bounty of **${amount:,}** placed on {target.mention}!", ephemeral=True)
+    else:
+        await interaction.followup.send("❌ Invalid usage. Use `/bounty list` or `/bounty set <amount> <target>`.", ephemeral=True)
+
+
+@bot.tree.command(name="ticket", description="Manage administrative support tickets.")
+async def ticket_cmd(interaction: discord.Interaction, action: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    if action.lower() == "stats":
+        db_cursor.execute("SELECT metric, count FROM ticket_stats")
+        stats = db_cursor.fetchall()
+        embed = discord.Embed(title="🎫 Support Ticket Statistics", color=0x06b6d4)
+        for metric, count in stats:
+            embed.add_field(name=metric.capitalize(), value=str(count), inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.followup.send("Support ticket creation is managed automatically through server panel integration.", ephemeral=True)
+
+
+@bot.tree.command(name="welcome", description="Configure server welcome message settings.")
+async def welcome_cmd(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO welcome_config (guild_id, channel, message) VALUES (?, ?, ?)", (interaction.guild.id, channel.name, message))
+    db_conn.commit()
+    await interaction.followup.send(f"✅ Welcome messages configured for channel {channel.mention}.", ephemeral=True)
+
+
+@bot.tree.command(name="goodbye", description="Configure server goodbye message settings.")
+async def goodbye_cmd(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO goodbye_config (guild_id, channel, message) VALUES (?, ?, ?)", (interaction.guild.id, channel.name, message))
+    db_conn.commit()
+    await interaction.followup.send(f"✅ Goodbye messages configured for channel {channel.mention}.", ephemeral=True)
+
+
+@bot.tree.command(name="killfeed", description="Enable or disable automated live server killfeed updates.")
+async def killfeed_cmd(interaction: discord.Interaction, enabled: bool, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled, channel_id) VALUES (?, ?, ?)", (interaction.guild.id, 1 if enabled else 0, channel.id))
+    db_conn.commit()
+    status_str = "Enabled" if enabled else "Disabled"
+    await interaction.followup.send(f"⚔️ Killfeed successfully **{status_str}** targeting channel {channel.mention}.", ephemeral=True)
+
+
+@bot.tree.command(name="leaderboard", description="Configure the live server player leaderboard channel.")
+async def leaderboard_cmd(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    if not await verify_server_access(interaction):
+        return
+    db_cursor.execute("INSERT OR REPLACE INTO leaderboard_config (guild_id, channel_id) VALUES (?, ?)", (interaction.guild.id, channel.id))
+    db_conn.commit()
+    await interaction.followup.send(f"🏆 Leaderboard display channel set to {channel.mention}.", ephemeral=True)
+
 
 # --- RUN WEB SERVER & BOT CONCURRENTLY ---
 async def start_web_server():
