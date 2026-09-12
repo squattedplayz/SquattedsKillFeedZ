@@ -1,6 +1,7 @@
 import os
 import asyncio
 import aiohttp
+from aiohttp import web
 import sqlite3
 import discord
 from discord.ext import commands, tasks
@@ -10,6 +11,9 @@ import stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY", "sk_test_placeholder")
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN", "your_bot_token_here")
 NITRADO_API_TOKEN = os.getenv("NITRADO_API_TOKEN", "your_nitrado_token_here")
+WEB_SERVER_HOST = "0.0.0.0"
+WEB_SERVER_PORT = int(os.getenv("PORT", 8080))
+PUBLIC_URL = os.getenv("PUBLIC_URL", f"http://localhost:{WEB_SERVER_PORT}")
 
 MASTER_ADMIN_ID = 578271264779665438
 
@@ -88,8 +92,8 @@ CREATE TABLE IF NOT EXISTS radar_config (
 CREATE TABLE IF NOT EXISTS zones (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     guild_id INTEGER,
+    map_name TEXT,
     zone_type TEXT,
-    name TEXT,
     coords TEXT
 );
 
@@ -826,112 +830,169 @@ async def shopremove_cmd(interaction: discord.Interaction, item_name: str):
         await interaction.followup.send(f"❌ Item **{item_name}** was not found in the shop.", ephemeral=True)
 
 
-# --- INTERACTIVE VISUAL MAP & ZONE DRAWING SYSTEM ---
-class VisualZoneCanvasView(discord.ui.View):
+# --- INTERACTIVE ZOOMABLE WEB MAP & ZONE DRAWER ---
+MAP_IMAGE_URLS = {
+    "Chernarus": "https://static.wikia.nocookie.net/dayz_gamepedia/images/b/b3/ChernarusPlus_Map.jpg",
+    "Livonia": "https://static.wikia.nocookie.net/dayz_gamepedia/images/5/5a/Livonia_Map.jpg",
+    "Sakhal": "https://static.wikia.nocookie.net/dayz_gamepedia/images/d/d4/Sakhal_Map.jpg"
+}
+
+async def web_map_editor(request):
+    guild_id = request.match_info.get('guild_id')
+    map_name = request.query.get('map', 'Chernarus')
+    zone_type = request.query.get('type', 'Base Radar')
+    map_img = MAP_IMAGE_URLS.get(map_name, MAP_IMAGE_URLS["Chernarus"])
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>SquattedSkillFeedZ - Precision Map Drawer ({map_name})</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body, html {{ margin: 0; padding: 0; height: 100%; font-family: sans-serif; background: #0f172a; color: #f8fafc; }}
+        #map {{ height: calc(100vh - 70px); width: 100%; background: #1e293b; }}
+        .header {{ height: 70px; background: #1e293b; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: 2px solid #334155; }}
+        .btn {{ background: #7e22ce; color: white; border: none; padding: 10px 20px; font-weight: bold; border-radius: 6px; cursor: pointer; }}
+        .btn:hover {{ background: #9333ea; }}
+        .select {{ padding: 8px; border-radius: 6px; background: #334155; color: white; border: 1px solid #475569; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h2>🗺️ Map: <select id="mapSelect" class="select" onchange="changeMap()">
+                <option value="Chernarus" {("selected" if map_name=="Chernarus" else "")}>Chernarus</option>
+                <option value="Livonia" {("selected" if map_name=="Livonia" else "")}>Livonia</option>
+                <option value="Sakhal" {("selected" if map_name=="Sakhal" else "")}>Sakhal</option>
+            </select> | Type: <b>{zone_type}</b></h2>
+        </div>
+        <div>
+            <button class="btn" onclick="saveZone()">💾 Save Drawn Zone</button>
+        </div>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        const map = L.map('map', {{
+            crs: L.CRS.Simple,
+            minZoom: -2,
+            maxZoom: 4,
+            zoomSnap: 0.25
+        }});
+
+        const bounds = [[0, 0], [4096, 4096]];
+        const image = L.imageOverlay('{map_img}', bounds).addTo(map);
+        map.fitBounds(bounds);
+
+        let drawnRect = null;
+        let startPoint = null;
+        let isDrawing = false;
+
+        map.on('click', function(e) {{
+            if (!isDrawing) {{
+                startPoint = e.latlng;
+                isDrawing = true;
+                if (drawnRect) map.removeLayer(drawnRect);
+            }} else {{
+                let endPoint = e.latlng;
+                drawnRect = L.rectangle([startPoint, endPoint], {{color: "#7e22ce", weight: 3, fillColor: "#9333ea", fillOpacity: 0.4}}).addTo(map);
+                isDrawing = false;
+            }}
+        }});
+
+        map.on('mousemove', function(e) {{
+            if (isDrawing && startPoint) {{
+                if (drawnRect) map.removeLayer(drawnRect);
+                drawnRect = L.rectangle([startPoint, e.latlng], {{color: "#a855f7", weight: 2, fillColor: "#a855f7", fillOpacity: 0.2}}).addTo(map);
+            }}
+        }});
+
+        function changeMap() {{
+            const selected = document.getElementById('mapSelect').value;
+            window.location.href = `/map/{guild_id}?map=${{selected}}&type={zone_type}`;
+        }}
+
+        async function saveZone() {{
+            if (!drawnRect) {{
+                alert('Please click on the map to draw a zone boundary first!');
+                return;
+            }}
+            const b = drawnRect.getBounds();
+            const coordsData = `SW: ${{b.getSouthWest().lat.toFixed(1)}}, ${{b.getSouthWest().lng.toFixed(1)}} | NE: ${{b.getNorthEast().lat.toFixed(1)}}, ${{b.getNorthEast().lng.toFixed(1)}}`;
+            
+            const resp = await fetch(`/api/save_zone`, {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ guild_id: {guild_id}, map_name: '{map_name}', zone_type: '{zone_type}', coords: coordsData }})
+            }});
+            
+            if (resp.ok) {{
+                alert('✅ Zone successfully saved to Discord server database! You can close this window.');
+                window.close();
+            }} else {{
+                alert('❌ Error saving zone.');
+            }}
+        }}
+    </script>
+</body>
+</html>"""
+    return web.Response(text=html, content_type='html')
+
+async def api_save_zone(request):
+    data = await request.json()
+    db_cursor.execute(
+        "INSERT INTO zones (guild_id, map_name, zone_type, coords) VALUES (?, ?, ?, ?)",
+        (data['guild_id'], data['map_name'], data['zone_type'], data['coords'])
+    )
+    db_conn.commit()
+    return web.json_response({"status": "success"})
+
+class MapSelectView(discord.ui.View):
     def __init__(self, zone_type: str):
         super().__init__(timeout=180)
         self.zone_type = zone_type
-        # 3x3 Grid of sectors representing the visual map canvas (Row x Col: 0 to 2)
-        self.grid = [[False for _ in range(3)] for _ in range(3)]
-        self.rebuild_buttons()
 
-    def rebuild_buttons(self):
-        self.clear_items()
-        for r in range(3):
-            for c in range(3):
-                active = self.grid[r][c]
-                label = f"Sector {r+1},{c+1} {'🟢' if active else '⬛'}"
-                style = discord.ButtonStyle.success if active else discord.ButtonStyle.secondary
-                button = discord.ui.Button(label=label, style=style, custom_id=f"cell_{r}_{c}", row=r)
-                button.callback = self.make_callback(r, c)
-                self.add_item(button)
-        
-        # Save and Cancel control buttons in row 3
-        save_btn = discord.ui.Button(label="💾 Save Drawn Zone", style=discord.ButtonStyle.primary, custom_id="save_zone", row=3)
-        save_btn.callback = self.save_callback
-        self.add_item(save_btn)
-
-        cancel_btn = discord.ui.Button(label="❌ Cancel", style=discord.ButtonStyle.danger, custom_id="cancel_zone", row=3)
-        cancel_btn.callback = self.cancel_callback
-        self.add_item(cancel_btn)
-
-    def make_callback(self, r, c):
-        async def callback(interaction: discord.Interaction):
-            self.grid[r][c] = not self.grid[r][c]
-            self.rebuild_buttons()
-            
-            # Generate visual representation for embed
-            visual_map = "\n".join([
-                " ".join([("🟢" if self.grid[row][col] else "⬛") for col in range(3)])
-                for row in range(3)
-            ])
-            
-            embed = discord.Embed(
-                title=f"🗺️ Visual Map Canvas — {self.zone_type}",
-                description=f"Click the grid sectors below to draw your zone boundaries interactively.\n\n**Current Visual Map:**\n{visual_map}",
-                color=0x7e22ce
-            )
-            await interaction.response.edit_message(embed=embed, view=self)
-        return callback
-
-    async def save_callback(self, interaction: discord.Interaction):
-        selected_sectors = [f"Sector ({r+1},{c+1})" for r in range(3) for c in range(3) if self.grid[r][c]]
-        if not selected_sectors:
-            await interaction.response.send_message("❌ Please select at least one sector on the map canvas before saving.", ephemeral=True)
-            return
-
-        coords_str = ", ".join(selected_sectors)
-        db_cursor.execute(
-            "INSERT INTO zones (guild_id, zone_type, name, coords) VALUES (?, ?, ?, ?)",
-            (interaction.guild.id, self.zone_type, f"Visual Zone ({self.zone_type})", coords_str)
-        )
-        db_conn.commit()
-        
-        visual_map = "\n".join([
-            " ".join([("🟢" if self.grid[row][col] else "⬛") for col in range(3)])
-            for row in range(3)
-        ])
+    @discord.ui.select(placeholder="Select DayZ Map...", options=[
+        discord.SelectOption(label="Chernarus", description="Standard 15x15km wooded & military map", emoji="🌲"),
+        discord.SelectOption(label="Livonia", description="Lush forested and riverine DLC map", emoji="🌊"),
+        discord.SelectOption(label="Sakhal", description="Severe arctic volcanic archipelago map", emoji="❄️")
+    ])
+    async def select_map(self, interaction: discord.Interaction, select: discord.ui.Select):
+        selected_map = select.values[0]
+        web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={selected_map}&type={self.zone_type}"
         
         embed = discord.Embed(
-            title=f"✅ Zone Successfully Saved & Locked!",
-            description=f"**Type:** {self.zone_type}\n**Selected Sectors:** {coords_str}\n\n**Final Drawn Map:**\n{visual_map}",
-            color=0x22c55e
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-        self.stop()
-
-    async def cancel_callback(self, interaction: discord.Interaction):
-        await interaction.response.edit_message(content="❌ Zone drawing canceled.", embed=None, view=None)
-        self.stop()
-
-class ZoneTypeSelect(discord.ui.Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label="Base Radar", description="High-speed precision radar tracking base activity"),
-            discord.SelectOption(label="PvP Zone", description="Designated player combat zone"),
-            discord.SelectOption(label="Safe Zone", description="Protected non-combat zone"),
-            discord.SelectOption(label="Player Radar", description="Instant-refresh 15s target tracking radar"),
-            discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone creation/removal")
-        ]
-        super().__init__(placeholder="Select zone type to draw...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        zone_type = self.values[0]
-        view = VisualZoneCanvasView(zone_type)
-        visual_map = "⬛ ⬛ ⬛\n⬛ ⬛ ⬛\n⬛ ⬛ ⬛"
-        embed = discord.Embed(
-            title=f"🗺️ Visual Map Canvas — {zone_type}",
-            description=f"Click the grid sectors below to draw your zone boundaries interactively.\n\n**Current Visual Map:**\n{visual_map}",
+            title=f"🗺️ Precision Map Canvas — {selected_map} ({self.zone_type})",
+            description=f"Click the secure button below to launch your **Interactive Zoomable Map Drawer** in your browser.\n\n• **Zoom in/out** with your mouse wheel or pinch gesture for pinpoint accuracy.\n• **Click & drag** to draw custom zone boxes.\n• Click **Save** to instantly sync the zones back to your Discord server bot.",
             color=0x7e22ce
         )
+        view = discord.ui.View()
+        view.add_item(discord.ui.Button(label="🌐 Open Zoomable Map Canvas", style=discord.ButtonStyle.link, url=web_url))
         await interaction.response.edit_message(embed=embed, view=view)
 
-class MapView(discord.ui.View):
+class ZoneTypeSelectView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ZoneTypeSelect())
+        super().__init__(timeout=180)
 
-@bot.tree.command(name="zone", description="Manage and visually draw zones/radars on an interactive grid map (Admin only).")
+    @discord.ui.select(placeholder="Select Zone Type to Draw...", options=[
+        discord.SelectOption(label="Base Radar", description="High-speed precision radar tracking base activity"),
+        discord.SelectOption(label="PvP Zone", description="Designated player combat zone"),
+        discord.SelectOption(label="Safe Zone", description="Protected non-combat zone"),
+        discord.SelectOption(label="Player Radar", description="Instant-refresh 15s target tracking radar"),
+        discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone")
+    ])
+    async def select_zone_type(self, interaction: discord.Interaction, select: discord.ui.Select):
+        zone_type = select.values[0]
+        embed = discord.Embed(
+            title=f"🗺️ Select Map for {zone_type}",
+            description="Choose which DayZ map you want to open in the interactive zoomable drawing canvas.",
+            color=0x7e22ce
+        )
+        await interaction.response.edit_message(embed=embed, view=MapSelectView(zone_type))
+
+@bot.tree.command(name="zone", description="Launch the interactive zoomable web map drawer for zones/radars (Admin only).")
 async def zone_cmd(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     if not await verify_server_access(interaction):
@@ -941,11 +1002,15 @@ async def zone_cmd(interaction: discord.Interaction, action: str, channel: disco
         return
 
     if action.lower() == "create":
-        embed = discord.Embed(title="📍 Interactive Visual Map & Zone Drawer", description="Select the zone type below from the dropdown menu to launch the visual drawing grid.", color=0x7e22ce)
+        embed = discord.Embed(
+            title="📍 Interactive Zoomable Map Drawer",
+            description="Select the **Zone Type** below from the dropdown menu to begin.",
+            color=0x7e22ce
+        )
         if channel:
             db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, channel_id) VALUES (?, 'General', ?)", (interaction.guild.id, channel.id))
             db_conn.commit()
-        await interaction.followup.send(embed=embed, view=MapView(), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=ZoneTypeSelectView(), ephemeral=True)
     elif action.lower() == "remove":
         db_cursor.execute("DELETE FROM zones WHERE guild_id = ?", (interaction.guild.id,))
         db_conn.commit()
@@ -953,6 +1018,20 @@ async def zone_cmd(interaction: discord.Interaction, action: str, channel: disco
     else:
         await interaction.followup.send("❌ Use `/zone create` or `/zone remove`.", ephemeral=True)
 
-# --- BOT LAUNCH ---
+# --- RUN WEB SERVER & BOT CONCURRENTLY ---
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/map/{guild_id}', web_map_editor)
+    app.router.add_post('/api/save_zone', api_save_zone)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
+    await site.start()
+    print(f"🌐 Web map canvas server running at {PUBLIC_URL}")
+
+async def main():
+    await start_web_server()
+    await bot.start(DISCORD_BOT_TOKEN)
+
 if __name__ == "__main__":
-    bot.run(DISCORD_BOT_TOKEN)
+    asyncio.run(main())
