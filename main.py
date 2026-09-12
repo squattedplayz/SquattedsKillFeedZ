@@ -826,23 +826,83 @@ async def shopremove_cmd(interaction: discord.Interaction, item_name: str):
         await interaction.followup.send(f"❌ Item **{item_name}** was not found in the shop.", ephemeral=True)
 
 
-# --- ZONE & MAP DRAWING SYSTEM ---
-class ZoneConfigModal(discord.ui.Modal, title="Configure Zone Parameters"):
-    zone_name = discord.ui.TextInput(label="Zone Name / Identifier", placeholder="e.g., Trader City / Base Alpha", required=True)
-    coordinates = discord.ui.TextInput(label="Coordinates & Radius", placeholder="e.g., X:1145 Y:6532 Radius:300m", required=True)
-
+# --- INTERACTIVE VISUAL MAP & ZONE DRAWING SYSTEM ---
+class VisualZoneCanvasView(discord.ui.View):
     def __init__(self, zone_type: str):
-        super().__init__()
+        super().__init__(timeout=180)
         self.zone_type = zone_type
+        # 3x3 Grid of sectors representing the visual map canvas (Row x Col: 0 to 2)
+        self.grid = [[False for _ in range(3)] for _ in range(3)]
+        self.rebuild_buttons()
 
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+    def rebuild_buttons(self):
+        self.clear_items()
+        for r in range(3):
+            for c in range(3):
+                active = self.grid[r][c]
+                label = f"Sector {r+1},{c+1} {'🟢' if active else '⬛'}"
+                style = discord.ButtonStyle.success if active else discord.ButtonStyle.secondary
+                button = discord.ui.Button(label=label, style=style, custom_id=f"cell_{r}_{c}", row=r)
+                button.callback = self.make_callback(r, c)
+                self.add_item(button)
+        
+        # Save and Cancel control buttons in row 3
+        save_btn = discord.ui.Button(label="💾 Save Drawn Zone", style=discord.ButtonStyle.primary, custom_id="save_zone", row=3)
+        save_btn.callback = self.save_callback
+        self.add_item(save_btn)
+
+        cancel_btn = discord.ui.Button(label="❌ Cancel", style=discord.ButtonStyle.danger, custom_id="cancel_zone", row=3)
+        cancel_btn.callback = self.cancel_callback
+        self.add_item(cancel_btn)
+
+    def make_callback(self, r, c):
+        async def callback(interaction: discord.Interaction):
+            self.grid[r][c] = not self.grid[r][c]
+            self.rebuild_buttons()
+            
+            # Generate visual representation for embed
+            visual_map = "\n".join([
+                " ".join([("🟢" if self.grid[row][col] else "⬛") for col in range(3)])
+                for row in range(3)
+            ])
+            
+            embed = discord.Embed(
+                title=f"🗺️ Visual Map Canvas — {self.zone_type}",
+                description=f"Click the grid sectors below to draw your zone boundaries interactively.\n\n**Current Visual Map:**\n{visual_map}",
+                color=0x7e22ce
+            )
+            await interaction.response.edit_message(embed=embed, view=self)
+        return callback
+
+    async def save_callback(self, interaction: discord.Interaction):
+        selected_sectors = [f"Sector ({r+1},{c+1})" for r in range(3) for c in range(3) if self.grid[r][c]]
+        if not selected_sectors:
+            await interaction.response.send_message("❌ Please select at least one sector on the map canvas before saving.", ephemeral=True)
+            return
+
+        coords_str = ", ".join(selected_sectors)
         db_cursor.execute(
             "INSERT INTO zones (guild_id, zone_type, name, coords) VALUES (?, ?, ?, ?)",
-            (interaction.guild.id, self.zone_type, self.zone_name.value, self.coordinates.value)
+            (interaction.guild.id, self.zone_type, f"Visual Zone ({self.zone_type})", coords_str)
         )
         db_conn.commit()
-        await interaction.followup.send(f"✅ Successfully configured **{self.zone_type}** (`{self.zone_name.value}`) at coordinates `{self.coordinates.value}`!", ephemeral=True)
+        
+        visual_map = "\n".join([
+            " ".join([("🟢" if self.grid[row][col] else "⬛") for col in range(3)])
+            for row in range(3)
+        ])
+        
+        embed = discord.Embed(
+            title=f"✅ Zone Successfully Saved & Locked!",
+            description=f"**Type:** {self.zone_type}\n**Selected Sectors:** {coords_str}\n\n**Final Drawn Map:**\n{visual_map}",
+            color=0x22c55e
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+        self.stop()
+
+    async def cancel_callback(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="❌ Zone drawing canceled.", embed=None, view=None)
+        self.stop()
 
 class ZoneTypeSelect(discord.ui.Select):
     def __init__(self):
@@ -853,18 +913,25 @@ class ZoneTypeSelect(discord.ui.Select):
             discord.SelectOption(label="Player Radar", description="Instant-refresh 15s target tracking radar"),
             discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone creation/removal")
         ]
-        super().__init__(placeholder="Select zone type to configure...", options=options)
+        super().__init__(placeholder="Select zone type to draw...", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        selected_type = self.values[0]
-        await interaction.response.send_modal(ZoneConfigModal(selected_type))
+        zone_type = self.values[0]
+        view = VisualZoneCanvasView(zone_type)
+        visual_map = "⬛ ⬛ ⬛\n⬛ ⬛ ⬛\n⬛ ⬛ ⬛"
+        embed = discord.Embed(
+            title=f"🗺️ Visual Map Canvas — {zone_type}",
+            description=f"Click the grid sectors below to draw your zone boundaries interactively.\n\n**Current Visual Map:**\n{visual_map}",
+            color=0x7e22ce
+        )
+        await interaction.response.edit_message(embed=embed, view=view)
 
 class MapView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(ZoneTypeSelect())
 
-@bot.tree.command(name="zone", description="Manage zones (Base Radars, PvP, Safe, Gas, Player Radars) - Admin only.")
+@bot.tree.command(name="zone", description="Manage and visually draw zones/radars on an interactive grid map (Admin only).")
 async def zone_cmd(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     if not await verify_server_access(interaction):
@@ -874,7 +941,7 @@ async def zone_cmd(interaction: discord.Interaction, action: str, channel: disco
         return
 
     if action.lower() == "create":
-        embed = discord.Embed(title="📍 Step-by-Step Zone & Radar Creator", description="Select the zone type below to launch the parameter configuration prompt and bind feeds.", color=0x7e22ce)
+        embed = discord.Embed(title="📍 Interactive Visual Map & Zone Drawer", description="Select the zone type below from the dropdown menu to launch the visual drawing grid.", color=0x7e22ce)
         if channel:
             db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, channel_id) VALUES (?, 'General', ?)", (interaction.guild.id, channel.id))
             db_conn.commit()
