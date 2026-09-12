@@ -382,6 +382,7 @@ class MapSelectView(discord.ui.View):
         discord.SelectOption(label="Sakhal", description="Severe arctic volcanic archipelago map", emoji="❄️")
     ])
     async def select_map(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.defer()
         selected_map = select.values[0]
         map_image_url = MAP_IMAGE_URLS.get(selected_map, MAP_IMAGE_URLS["Chernarus"])
         web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={selected_map}&type={self.zone_type}"
@@ -396,7 +397,7 @@ class MapSelectView(discord.ui.View):
         view = discord.ui.View()
         view.add_item(discord.ui.Button(label="🌐 Open Zoomable Web Canvas", style=discord.ButtonStyle.link, url=web_url))
         
-        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.edit_original_response(embed=embed, view=view)
 
 class ZoneTypeSelectView(discord.ui.View):
     def __init__(self):
@@ -410,13 +411,14 @@ class ZoneTypeSelectView(discord.ui.View):
         discord.SelectOption(label="Gas Zone", description="Contaminated toxic hazard zone")
     ])
     async def select_zone_type(self, interaction: discord.Interaction, select: discord.ui.Select):
+        await interaction.response.defer()
         zone_type = select.values[0]
         embed = discord.Embed(
             title=f"🗺️ Select Map for {zone_type}",
             description="Choose which DayZ map you want to open in the interactive zoomable drawing canvas.",
             color=0x7e22ce
         )
-        await interaction.response.edit_message(embed=embed, view=MapSelectView(zone_type))
+        await interaction.edit_original_response(embed=embed, view=MapSelectView(zone_type))
 
 
 # --- ALL COMPREHENSIVE DISCORD SLASH COMMANDS ---
