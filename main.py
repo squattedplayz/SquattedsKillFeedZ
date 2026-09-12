@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS whitelist (
 
 CREATE TABLE IF NOT EXISTS killfeed_config (
     guild_id INTEGER PRIMARY KEY,
-    enabled INTEGER
+    enabled INTEGER,
+    channel_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS leaderboard_config (
@@ -508,12 +509,13 @@ async def leaderboardsetup_cmd(interaction: discord.Interaction, channel: discor
 
 
 # --- KILLFEED SETUP COMMANDS ---
-@bot.tree.command(name="killfeed", description="Admin Only: Enable or disable the automated kill feed.")
+@bot.tree.command(name="killfeed", description="Admin Only: Enable, disable, or set the channel for the automated kill feed.")
 @discord.app_commands.choices(action=[
     discord.app_commands.Choice(name="enable", value="enable"),
-    discord.app_commands.Choice(name="disable", value="disable")
+    discord.app_commands.Choice(name="disable", value="disable"),
+    discord.app_commands.Choice(name="channel", value="channel")
 ])
-async def killfeed_cmd(interaction: discord.Interaction, action: str):
+async def killfeed_cmd(interaction: discord.Interaction, action: str, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     if not await verify_server_access(interaction):
         return
@@ -522,13 +524,20 @@ async def killfeed_cmd(interaction: discord.Interaction, action: str):
         return
     
     if action == "enable":
-        db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled) VALUES (?, 1)", (interaction.guild.id,))
+        db_cursor.execute("INSERT INTO killfeed_config (guild_id, enabled) VALUES (?, 1) ON CONFLICT(guild_id) DO UPDATE SET enabled = 1", (interaction.guild.id,))
         db_conn.commit()
         await interaction.followup.send("✅ Kill feed has been **enabled** for this server.", ephemeral=True)
     elif action == "disable":
-        db_cursor.execute("INSERT OR REPLACE INTO killfeed_config (guild_id, enabled) VALUES (?, 0)", (interaction.guild.id,))
+        db_cursor.execute("INSERT INTO killfeed_config (guild_id, enabled) VALUES (?, 0) ON CONFLICT(guild_id) DO UPDATE SET enabled = 0", (interaction.guild.id,))
         db_conn.commit()
         await interaction.followup.send("❌ Kill feed has been **disabled** for this server.", ephemeral=True)
+    elif action == "channel":
+        if not channel:
+            await interaction.followup.send("❌ Please specify a target text channel when using `/killfeed channel`.", ephemeral=True)
+            return
+        db_cursor.execute("INSERT INTO killfeed_config (guild_id, channel_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild.id, channel.id, channel.id))
+        db_conn.commit()
+        await interaction.followup.send(f"✅ Kill feed output channel has been successfully set to {channel.mention}.", ephemeral=True)
 
 
 # --- ECONOMY & BANKING SYSTEM ---
