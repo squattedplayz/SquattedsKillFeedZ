@@ -131,14 +131,14 @@ db_conn.commit()
 
 # --- ACCESS & SUBSCRIPTION CHECK ---
 async def verify_server_access(interaction: discord.Interaction) -> bool:
-    if interaction.user.id == MASTER_ADMIN_ID:
+    if interaction.user.id == 578271264779665438:
         return True
     try:
         owner = interaction.guild.owner or await interaction.guild.fetch_member(interaction.guild.owner_id)
-        if owner.id == MASTER_ADMIN_ID:
+        if owner.id == 578271264779665438:
             return True
     except Exception:
-        if interaction.guild.owner_id == MASTER_ADMIN_ID:
+        if interaction.guild.owner_id == 578271264779665438:
             return True
             
     db_cursor.execute("SELECT 1 FROM subscriptions WHERE guild_id = ?", (interaction.guild.id,))
@@ -184,7 +184,7 @@ class SubscriptionPayView(discord.ui.View):
             await interaction.followup.send(f"❌ Error creating Stripe session: {str(e)}", ephemeral=True)
 
 
-# --- BACKGROUND TASKS (HIGH FREQUENCY 30-45s RADAR & BUILD LOOP) ---
+# --- BACKGROUND TASKS ---
 @tasks.loop(seconds=35)
 async def player_and_base_radar_loop():
     db_cursor.execute("SELECT guild_id, value FROM server_config WHERE key = 'nitrado_service_id'")
@@ -224,7 +224,7 @@ async def player_and_base_radar_loop():
                                         p_pos = p.get('coords', [4500.0, 7800.0])
                                         x_coord = p_pos[0] if isinstance(p_pos, list) and len(p_pos) >= 2 else 4500.0
                                         z_coord = p_pos[1] if isinstance(p_pos, list) and len(p_pos) >= 2 else 7800.0
-                                        p_list.append(f"• **{p_name}** located at X: `{x_coord:.1f}`, Z: `{z_coord:.1f}` (100% Accurate)")
+                                        p_list.append(f"• **{p_name}** located at X: `{x_coord:.1f}`, Z: `{z_coord:.1f}`")
                                     embed.description = "\n".join(p_list)
                                 else:
                                     embed.description = "No players currently online."
@@ -254,6 +254,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    bot.add_view(SubscriptionPayView())
     if not player_and_base_radar_loop.is_running():
         player_and_base_radar_loop.start()
     if not daily_stats_aggregation_task.is_running():
@@ -395,9 +396,9 @@ async def api_save_zone(request):
     return web.json_response({"status": "success"})
 
 
-# --- INTERACTIVE ZONE SETUP VIEWS WITH BUILD RADAR DROPDOWN ---
+# --- INTERACTIVE ZONE SETUP VIEWS (FIXED WITH PERSISTENT VIEWS & NO TIMEOUTS) ---
 class ZoneTypeSelect(discord.ui.Select):
-    def __init__(self, map_name: str, channel: discord.TextChannel):
+    def __init__(self, map_name: str, channel_id: int):
         super().__init__(
             placeholder="Select Zone / Radar Type...",
             min_values=1,
@@ -405,21 +406,24 @@ class ZoneTypeSelect(discord.ui.Select):
             options=[
                 discord.SelectOption(label="Player Radar", description="Tracks active player locations every 35 seconds"),
                 discord.SelectOption(label="Build Radar", description="Pings when specific base building actions occur")
-            ]
+            ],
+            custom_id="persistent_zone_type_select"
         )
         self.map_name = map_name
-        self.channel = channel
+        self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         zone_type = self.values[0]
+        
         if zone_type == "Build Radar":
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "🔨 **Build Radar Selected:** Now choose the specific building trigger event you want to track:",
-                view=BuildTriggerSelectView(self.map_name, zone_type, self.channel),
+                view=BuildTriggerSelectView(self.map_name, zone_type, self.channel_id),
                 ephemeral=True
             )
         else:
-            db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, build_trigger, channel_id) VALUES (?, ?, ?, ?)", (interaction.guild.id, zone_type, "None", self.channel.id))
+            db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, build_trigger, channel_id) VALUES (?, ?, ?, ?)", (interaction.guild.id, zone_type, "None", self.channel_id))
             db_conn.commit()
 
             web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={self.map_name}&type={zone_type}&trigger=None"
@@ -433,15 +437,15 @@ class ZoneTypeSelect(discord.ui.Select):
                 color=0x7e22ce
             )
             embed.set_image(url=MAP_IMAGE_URLS.get(self.map_name, MAP_IMAGE_URLS["Chernarus"]))
-            await interaction.response.send_message(embed=embed, view=MapLinkView(web_url), ephemeral=True)
+            await interaction.followup.send(embed=embed, view=MapLinkView(web_url), ephemeral=True)
 
 class ZoneTypeView(discord.ui.View):
-    def __init__(self, map_name: str, channel: discord.TextChannel):
-        super().__init__(timeout=180)
-        self.add_item(ZoneTypeSelect(map_name, channel))
+    def __init__(self, map_name: str, channel_id: int):
+        super().__init__(timeout=None)
+        self.add_item(ZoneTypeSelect(map_name, channel_id))
 
 class BuildTriggerSelect(discord.ui.Select):
-    def __init__(self, map_name: str, zone_type: str, channel: discord.TextChannel):
+    def __init__(self, map_name: str, zone_type: str, channel_id: int):
         super().__init__(
             placeholder="Select Build Trigger Event...",
             min_values=1,
@@ -450,15 +454,18 @@ class BuildTriggerSelect(discord.ui.Select):
                 discord.SelectOption(label="Using a shovel", description="Ping when a player digs/builds with a shovel"),
                 discord.SelectOption(label="Building a wall", description="Ping when a fence/wall kit or upgrade is placed"),
                 discord.SelectOption(label="Placing a flag", description="Ping when a territorial flagpole is erected")
-            ]
+            ],
+            custom_id="persistent_build_trigger_select"
         )
         self.map_name = map_name
         self.zone_type = zone_type
-        self.channel = channel
+        self.channel_id = channel_id
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         build_trigger = self.values[0]
-        db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, build_trigger, channel_id) VALUES (?, ?, ?, ?)", (interaction.guild.id, self.zone_type, build_trigger, self.channel.id))
+        
+        db_cursor.execute("INSERT OR REPLACE INTO radar_config (guild_id, radar_type, build_trigger, channel_id) VALUES (?, ?, ?, ?)", (interaction.guild.id, self.zone_type, build_trigger, self.channel_id))
         db_conn.commit()
 
         web_url = f"{PUBLIC_URL}/map/{interaction.guild.id}?map={self.map_name}&type={self.zone_type}&trigger={build_trigger}"
@@ -469,15 +476,15 @@ class BuildTriggerSelect(discord.ui.Select):
                         "2. **Click** once on the map to start your zone boundary.\n"
                         "3. **Click** again on the opposite corner to finish drawing the box.\n"
                         "4. Click **Save Zone to Game Server** to sync coordinates instantly!",
-            color=0xf59e0b
+                color=0xf59e0b
         )
         embed.set_image(url=MAP_IMAGE_URLS.get(self.map_name, MAP_IMAGE_URLS["Chernarus"]))
-        await interaction.response.send_message(embed=embed, view=MapLinkView(web_url), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=MapLinkView(web_url), ephemeral=True)
 
 class BuildTriggerSelectView(discord.ui.View):
-    def __init__(self, map_name: str, zone_type: str, channel: discord.TextChannel):
-        super().__init__(timeout=180)
-        self.add_item(BuildTriggerSelect(map_name, zone_type, channel))
+    def __init__(self, map_name: str, zone_type: str, channel_id: int):
+        super().__init__(timeout=None)
+        self.add_item(BuildTriggerSelect(map_name, zone_type, channel_id))
 
 
 # --- SHOP & SETUP VIEWS ---
@@ -487,9 +494,10 @@ class ShopCategorySelect(discord.ui.Select):
         super().__init__(placeholder="Select a DayZ Item Category...", min_values=1, max_values=1, options=options)
 
     async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
         category = self.values[0]
         items = DAYZ_ITEMS_DATABASE[category]
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"✅ Category selected: **{category}**. Now select the specific item to add to the shop:",
             view=ShopItemSelectView(category, items),
             ephemeral=True
@@ -635,7 +643,7 @@ async def zone_cmd(
             description=f"Target Channel: {target_channel.mention}\n\nSelect whether you want to set up a **Player Radar** or a **Build Radar** below.",
             color=0x7e22ce
         )
-        await interaction.followup.send(embed=embed, view=ZoneTypeView(map_name, target_channel), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=ZoneTypeView(map_name, target_channel.id), ephemeral=True)
         
     elif action == "remove":
         db_cursor.execute("DELETE FROM zones WHERE guild_id = ?", (interaction.guild.id,))
