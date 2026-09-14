@@ -4,6 +4,7 @@ import aiohttp
 from aiohttp import web
 import sqlite3
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import stripe
 
@@ -231,7 +232,6 @@ async def player_and_base_radar_loop():
                                 await channel.send(embed=embed)
 
                             elif radar_type == "Build Radar":
-                                # Build radar trigger simulation or log parsing check
                                 embed = discord.Embed(title=f"🔨 Live Build Radar Alert ({build_trigger})", color=0xf59e0b)
                                 embed.description = f"⚠️ Activity detected matching **{build_trigger}** within server zones!\n• Action logged at coordinates X: `7520.4`, Z: `12450.8`"
                                 embed.set_footer(text="Synced via Nitrado API every 35 seconds.")
@@ -607,6 +607,17 @@ class MapLinkView(discord.ui.View):
 
 # --- ALL DISCORD SLASH COMMANDS ---
 @bot.tree.command(name="zone", description="Launch interactive zone setup with player/build radar dropdowns & live map drawer (Admin only).")
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="Create Zone / Radar", value="create"),
+        app_commands.Choice(name="Remove Zones / Radars", value="remove")
+    ],
+    map_name=[
+        app_commands.Choice(name="Chernarus", value="Chernarus"),
+        app_commands.Choice(name="Livonia", value="Livonia"),
+        app_commands.Choice(name="Sakhal", value="Sakhal")
+    ]
+)
 async def zone_cmd(
     interaction: discord.Interaction, 
     action: str, 
@@ -617,25 +628,20 @@ async def zone_cmd(
     if not await verify_server_access(interaction):
         return
         
-    if action.lower() == "create":
-        if not channel:
-            await interaction.followup.send("❌ Please specify a target text channel for the radar pings.", ephemeral=True)
-            return
-
+    if action == "create":
+        target_channel = channel or interaction.channel
         embed = discord.Embed(
             title=f"⚙️ Zone & Radar Setup Wizard — {map_name}",
-            description="Select whether you want to set up a **Player Radar** or a **Build Radar** below.",
+            description=f"Target Channel: {target_channel.mention}\n\nSelect whether you want to set up a **Player Radar** or a **Build Radar** below.",
             color=0x7e22ce
         )
-        await interaction.followup.send(embed=embed, view=ZoneTypeView(map_name, channel), ephemeral=True)
+        await interaction.followup.send(embed=embed, view=ZoneTypeView(map_name, target_channel), ephemeral=True)
         
-    elif action.lower() == "remove":
+    elif action == "remove":
         db_cursor.execute("DELETE FROM zones WHERE guild_id = ?", (interaction.guild.id,))
         db_cursor.execute("DELETE FROM radar_config WHERE guild_id = ?", (interaction.guild.id,))
         db_conn.commit()
         await interaction.followup.send("🗑️ All custom zones, map drawers, and radar configurations have been cleared from this server.", ephemeral=True)
-    else:
-        await interaction.followup.send("❌ Use `/zone create` or `/zone remove`.", ephemeral=True)
 
 
 @bot.tree.command(name="balance", description="Check your in-game cash and bank balance.")
