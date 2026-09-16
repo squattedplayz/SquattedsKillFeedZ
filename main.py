@@ -2,8 +2,8 @@ import os
 import aiohttp
 import sqlite3
 import discord
-from discord.ext import commands
-from discord.ui import View, Button, Select
+from discord import app_commands
+from discord.ui import View, Button
 
 # --- CONFIGURATION & CREDENTIALS ---
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -53,13 +53,19 @@ class ZoneManagementView(View):
 async def on_ready():
     # Register persistent views to prevent UI timeouts
     bot.add_view(ZoneManagementView())
+    # Sync slash commands with Discord
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash command(s).")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+        
     print(f"Logged in as {bot.user} | Connected to Nitrado Service: {NITRADO_SERVICE_ID}")
 
-@bot.command(name="zones")
-async def zones_command(ctx):
-    """Native Discord interface for managing polygon/area zones, radars, and safe/PvP boundaries."""
-    # Check developer bypass or regular permissions here
-    if ctx.author.id != DEVELOPER_DISCORD_ID:
+@bot.tree.command(name="zones", description="Manage DayZ server safe zones, PvP boundaries, and build radars.")
+async def zones_command(interaction: discord.Interaction):
+    """Native Discord slash command interface for managing zones and radars."""
+    if interaction.user.id != DEVELOPER_DISCORD_ID:
         # Standard subscription check logic can go here for non-developers
         pass
 
@@ -71,14 +77,16 @@ async def zones_command(ctx):
     embed.add_field(name="Nitrado Integration", value=f"Active Service ID: `{NITRADO_SERVICE_ID}`", inline=False)
     
     view = ZoneManagementView()
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-@bot.command(name="nitrado_test")
-async def nitrado_test(ctx):
-    """Tests the connection to the Nitrado API using your token and service ID."""
-    if ctx.author.id != DEVELOPer_DISCORD_ID: # Handled securely
+@bot.tree.command(name="nitradotest", description="Tests the connection to the Nitrado API using your token and service ID.")
+async def nitrado_test(interaction: discord.Interaction):
+    """Tests the connection to the Nitrado API via slash command."""
+    if interaction.user.id != DEVELOPER_DISCORD_ID:
         pass
         
+    await interaction.response.defer(ephemeral=True)
+    
     headers = {"Authorization": f"Bearer {NITRADO_API_TOKEN}"}
     url = f"https://api.nitrado.net/services/{NITRADO_SERVICE_ID}"
     
@@ -87,9 +95,9 @@ async def nitrado_test(ctx):
             if resp.status == 200:
                 data = await resp.json()
                 status = data.get("data", {}).get("service", {}).get("status", "unknown")
-                await ctx.send(f"Successfully connected to Nitrado! Server Status: `{status}`")
+                await interaction.followup.send(f"Successfully connected to Nitrado! Server Status: `{status}`", ephemeral=True)
             else:
-                await ctx.send(f"Failed to connect to Nitrado API. HTTP Status: {resp.status}")
+                await interaction.followup.send(f"Failed to connect to Nitrado API. HTTP Status: {resp.status}", ephemeral=True)
 
 if __name__ == "__main__":
     if not TOKEN:
